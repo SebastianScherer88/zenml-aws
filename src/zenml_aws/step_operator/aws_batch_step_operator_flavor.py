@@ -13,10 +13,9 @@
 #  permissions and limitations under the License.
 """AWS Batch Step operator flavor."""
 
-from typing import Dict, Optional, Type, Literal
+from typing import Dict, Literal, Optional, Type
 
 from pydantic import Field, PositiveInt
-from zenml.utils.secret_utils import SecretField
 from zenml.config.base_settings import BaseSettings
 from zenml.integrations.aws import (
     AWS_RESOURCE_TYPE,
@@ -26,46 +25,46 @@ from zenml.step_operators.base_step_operator import (
     BaseStepOperatorConfig,
     BaseStepOperatorFlavor,
 )
+from zenml.utils.secret_utils import SecretField
+
 from zenml_aws import AWS_BATCH_STEP_OPERATOR_FLAVOR
+
 
 class AWSBatchStepOperatorSettings(BaseSettings):
     """Settings for the Sagemaker step operator."""
 
     environment: Dict[str, str] = Field(
         default_factory=dict,
-        description="Environment variables to pass to the container during " \
-            "execution. Example: {'LOG_LEVEL': 'INFO', 'DEBUG_MODE': 'False'}",
+        description="Environment variables to pass to the container during "
+        "execution. Example: {'LOG_LEVEL': 'INFO', 'DEBUG_MODE': 'False'}",
     )
     job_queue_name: str = Field(
         default="",
         description="The AWS Batch job queue to submit the step AWS Batch job"
-         " to. If not provided, falls back to the default job queue name "
-         "specified at stack registration time. Must be compatible with"
-         "`backend`."
+        " to. If not provided, falls back to the default job queue name "
+        "specified at stack registration time. Must be compatible with"
+        "`backend`.",
     )
-    backend: Literal['EC2','FARGATE'] = Field(
+    backend: Literal["EC2", "FARGATE"] = Field(
         default="FARGATE",
         description="The AWS Batch platform capability for the step AWS Batch "
         "job to be orchestrated with. Must be compatible with `job_queue_name`."
-        "Defaults to 'FARGATE'."
+        "Defaults to 'FARGATE'.",
     )
-    assign_public_ip: Literal['ENABLED','DISABLED'] = Field(
+    assign_public_ip: Literal["ENABLED", "DISABLED"] = Field(
         default="ENABLED",
         description="Sets the network configuration's assignPublicIp field."
-        "Only relevant for FARGATE backend."
+        "Only relevant for FARGATE backend.",
     )
     timeout_seconds: PositiveInt = Field(
         default=3600,
-        description="The number of seconds before AWS Batch times out the job."
+        description="The number of seconds before AWS Batch times out the job.",
     )
 
 
+class AWSBatchStepOperatorConfig(BaseStepOperatorConfig, AWSBatchStepOperatorSettings):
+    """Config for the AWS Batch step operator.
 
-class AWSBatchStepOperatorConfig(
-    BaseStepOperatorConfig, AWSBatchStepOperatorSettings
-):
-    """Config for the AWS Batch step operator. 
-    
     Note: We use ECS as a backend (not EKS), and EC2 as a compute engine (not
     Fargate). This is because
      - users can avoid the complexity of setting up an EKS cluster, and
@@ -75,9 +74,7 @@ class AWSBatchStepOperatorConfig(
     execution_role: str = Field(
         description="The IAM role arn of the ECS execution role."
     )
-    job_role: str = Field(
-        description="The IAM role arn of the ECS job role."
-    )
+    job_role: str = Field(description="The IAM role arn of the ECS job role.")
     default_job_queue_name: str = Field(
         description="The default AWS Batch job queue to submit AWS Batch jobs to."
     )
@@ -186,7 +183,7 @@ class AWSBatchStepOperatorFlavor(BaseStepOperatorFlavor):
         return AWSBatchStepOperatorConfig
 
     @property
-    def implementation_class(self) -> Type["AWSBatchStepOperator"]:
+    def implementation_class(self):
         """Implementation class.
 
         Returns:

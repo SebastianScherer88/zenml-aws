@@ -22,33 +22,33 @@ from typing import (
     Type,
     cast,
 )
-from boto3 import Session
 
+from boto3 import Session
+from botocore.exceptions import ClientError
+from zenml.config.base_settings import BaseSettings
 from zenml.config.build_configuration import BuildConfiguration
+from zenml.config.step_run_info import StepRunInfo
 from zenml.enums import StackComponentType
+from zenml.logger import get_logger
+from zenml.models import PipelineDeploymentBase
+from zenml.stack import Stack, StackValidator
+from zenml.step_operators import BaseStepOperator
+from zenml.utils.string_utils import random_str
+
 from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorConfig,
     AWSBatchStepOperatorSettings,
 )
 from zenml_aws.utils import (
-    map_environment, 
-    map_resource_settings, 
-    sanitize_name,
     AWSBatchJobDefinition,
-    AWSBatchJobEC2Definition,
     AWSBatchJobDefinitionEC2ContainerProperties,
+    AWSBatchJobDefinitionFargateContainerProperties,
+    AWSBatchJobEC2Definition,
     AWSBatchJobFargateDefinition,
-    AWSBatchJobDefinitionFargateContainerProperties
+    map_environment,
+    map_resource_settings,
+    sanitize_name,
 )
-from zenml.logger import get_logger
-from zenml.stack import Stack, StackValidator
-from zenml.step_operators import BaseStepOperator
-from zenml.utils.string_utils import random_str
-from botocore.exceptions import ClientError
-
-from zenml.config.base_settings import BaseSettings
-from zenml.config.step_run_info import StepRunInfo
-from zenml.models import PipelineDeploymentBase
 
 logger = get_logger(__name__)
 
@@ -80,7 +80,7 @@ class AWSBatchStepOperator(BaseStepOperator):
             The settings class.
         """
         return AWSBatchStepOperatorSettings
-    
+
     def _get_aws_session(self) -> Session:
         """Method to create the AWS Batch session with proper authentication.
 
@@ -168,7 +168,7 @@ class AWSBatchStepOperator(BaseStepOperator):
             },
             custom_validation_function=_validate_remote_components,
         )
-    
+
     def generate_unique_batch_job_name(self, info: "StepRunInfo") -> str:
         """Utility to generate a unique AWS Batch job name.
 
@@ -191,10 +191,15 @@ class AWSBatchStepOperator(BaseStepOperator):
         suffix = random_str(6)
         return f"{job_name}-{suffix}"
 
-    def generate_job_definition(self, info: "StepRunInfo", entrypoint_command: List[str], environment: Dict[str,str]) -> AWSBatchJobDefinition:
-        """Utility to map zenml internal configurations to a valid AWS Batch 
+    def generate_job_definition(
+        self,
+        info: "StepRunInfo",
+        entrypoint_command: List[str],
+        environment: Dict[str, str],
+    ) -> AWSBatchJobDefinition:
+        """Utility to map zenml internal configurations to a valid AWS Batch
         job definition."""
-        
+
         image_name = info.get_image(key=BATCH_DOCKER_IMAGE_KEY)
 
         resource_settings = info.config.resource_settings
@@ -209,14 +214,20 @@ class AWSBatchStepOperator(BaseStepOperator):
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
             AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
             container_kwargs = {}
-        elif step_settings.backend == 'FARGATE':
+        elif step_settings.backend == "FARGATE":
             AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
-            AWSBatchContainerProperties = AWSBatchJobDefinitionFargateContainerProperties
-            container_kwargs = {'networkConfiguration': {"assignPublicIp":step_settings.assign_public_ip}}
+            AWSBatchContainerProperties = (
+                AWSBatchJobDefinitionFargateContainerProperties
+            )
+            container_kwargs = {
+                "networkConfiguration": {
+                    "assignPublicIp": step_settings.assign_public_ip
+                }
+            }
 
         return AWSBatchJobDefinitionClass(
             jobDefinitionName=job_name,
-            timeout={'attemptDurationSeconds':step_settings.timeout_seconds},
+            timeout={"attemptDurationSeconds": step_settings.timeout_seconds},
             type="container",
             containerProperties=AWSBatchContainerProperties(
                 executionRoleArn=self.config.execution_role,
@@ -225,10 +236,9 @@ class AWSBatchStepOperator(BaseStepOperator):
                 command=entrypoint_command,
                 environment=map_environment(environment),
                 resourceRequirements=map_resource_settings(resource_settings),
-                **container_kwargs
-            )
+                **container_kwargs,
+            ),
         )
-
 
     def get_docker_builds(
         self, deployment: "PipelineDeploymentBase"
@@ -273,40 +283,42 @@ class AWSBatchStepOperator(BaseStepOperator):
                 `boto3.Session`.
         """
 
-        job_definition = self.generate_job_definition(info, entrypoint_command, environment)
+        job_definition = self.generate_job_definition(
+            info, entrypoint_command, environment
+        )
 
         logger.info(f"Job definition: {job_definition}")
 
         boto_session = self._get_aws_session()
-        batch_client = boto_session.client('batch')
+        batch_client = boto_session.client("batch")
 
-        response = batch_client.register_job_definition(
-            **job_definition.model_dump()
-        )
+        response = batch_client.register_job_definition(**job_definition.model_dump())
 
-        job_definition_name = response['jobDefinitionName']
+        job_definition_name = response["jobDefinitionName"]
 
         step_settings = cast(AWSBatchStepOperatorSettings, self.get_settings(info))
 
         response = batch_client.submit_job(
             jobName=job_definition.jobDefinitionName,
-            jobQueue=step_settings.job_queue_name if step_settings.job_queue_name else self.config.default_job_queue_name,
+            jobQueue=step_settings.job_queue_name
+            if step_settings.job_queue_name
+            else self.config.default_job_queue_name,
             jobDefinition=job_definition_name,
         )
 
-        job_id = response['jobId']
+        job_id = response["jobId"]
 
         while True:
             try:
                 response = batch_client.describe_jobs(jobs=[job_id])
-                status = response['jobs'][0]['status']
-                status_reason = response['jobs'][0].get('statusReason', 'Unknown')
+                status = response["jobs"][0]["status"]
+                status_reason = response["jobs"][0].get("statusReason", "Unknown")
 
-                if status == 'SUCCEEDED':
+                if status == "SUCCEEDED":
                     logger.info(f"Job completed successfully: {job_id}")
                     break
                 elif status == "FAILED":
-                    raise RuntimeError(f'Job {job_id} failed: {status_reason}')
+                    raise RuntimeError(f"Job {job_id} failed: {status_reason}")
                 else:
                     logger.info(
                         f"Job {job_id} neither failed nor succeeded. Status: "
