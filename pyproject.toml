@@ -15,6 +15,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.2",
+    "ruff>=0.14.0",
+]
 # Optional: configure uv settings here if desired
 # example:
 # resolver = "uv"
