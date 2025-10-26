@@ -1,0 +1,3 @@
+name: zenml-aws-batch-test
+description: A minimal AWS stack for e2e testing of the AWS Batch step operator for the zenml library
+runtime: python

@@ -8,15 +8,15 @@ from zenml.logger import get_logger
 
 logger = get_logger(__name__)
 
-VALID_FARGATE_VCPU = ("0.25", "0.5", "1", "2", "4", "8", "16")
+VALID_FARGATE_VCPU = ("0.25", "0.5", "1.0", "2.0", "4.0", "8.0", "16.0")
 VALID_FARGATE_MEMORY = {
     "0.25": ("512", "1024", "2048"),
     "0.5": ("1024", "2048", "3072", "4096"),
-    "1": ("2048", "3072", "4096", "5120", "6144", "7168", "8192"),
-    "2": tuple(str(m) for m in range(4096, 16385, 1024)),
-    "4": tuple(str(m) for m in range(8192, 30721, 1024)),
-    "8": tuple(str(m) for m in range(16384, 61441, 4096)),
-    "16": tuple(str(m) for m in range(32768, 122881, 8192)),
+    "1.0": ("2048", "3072", "4096", "5120", "6144", "7168", "8192"),
+    "2.0": tuple(str(m) for m in range(4096, 16385, 1024)),
+    "4.0": tuple(str(m) for m in range(8192, 30721, 1024)),
+    "8.0": tuple(str(m) for m in range(16384, 61441, 4096)),
+    "16.0": tuple(str(m) for m in range(32768, 122881, 8192)),
 }
 
 
@@ -70,18 +70,19 @@ class AWSBatchJobDefinitionEC2ContainerProperties(
         ][0]
 
         cpu_float = float(cpu_requirement.value)
-        cpu_rounded_int = math.ceil(cpu_float)
+        cpu_rounded_int = int(math.ceil(cpu_float))
 
         if cpu_float != cpu_rounded_int:
             logger.info(
                 f"Rounded fractional EC2 resource VCPU vale from {cpu_float} to {cpu_rounded_int} "
                 "since AWS Batch on EC2 requires whole integer VCPU count value."
             )
-            resource_requirements = [
-                ResourceRequirement(type="VCPU", value=str(cpu_rounded_int)),
-                memory_requirement,
-            ]
-            resource_requirements.extend(gpu_requirement)
+
+        resource_requirements = [
+            ResourceRequirement(type="VCPU", value=str(cpu_rounded_int)),
+            memory_requirement,
+        ]
+        resource_requirements.extend(gpu_requirement)
 
         return resource_requirements
 
