@@ -1,3 +1,5 @@
 .vscode
 .venv
+.zen
 __pycache__
+src/zenml_aws.egg-info
