@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  zenml:
+    image: zenmldocker/zenml-server:0.91.0
+    ports:
+      - "8080:8080"
+    environment:
+      ZENML_DEBUG: true
+      ZENML_STORE_URL: mysql://zenml:password@zenml-metdata-store2fbf804.c1cyu4q20nag.eu-west-1.rds.amazonaws.com:3306/zenml
+      # for some reason, these do not work:
+      # ZENML_DEFAULT_USER_NAME: zenml
+      # ZENML_DEFAULT_USER_PASSWORD: password
+      # Use "default" and "" as username and password, respectively
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: on-failure
