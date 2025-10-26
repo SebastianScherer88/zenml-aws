@@ -51,6 +51,7 @@ aws_secret_access_key = <AWS_SECRET_ACCESS_KEY>
 
 ```bash
 export AWS_PROFILE=pulumi # 'set AWS_PROFILE=pulumi' on windows
+cd infrastructure
 pulumi up -y
 ```
 
@@ -135,6 +136,18 @@ zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam
 zenml stack register aws-test -a aws-s3 -o default -s aws-batch -c aws-ecr
 zenml stack set aws-test
 ```
+
+## Zenml dashboard (optional)
+
+It can be useful to track the state of stacks and pipelines via the zenml
+dashboard running independently against the same SQL zenml store:
+
+```bash
+cd infrastructure
+docker compose up
+```
+
+The username is "default", and the password is empty.
 
 # Tests
 
