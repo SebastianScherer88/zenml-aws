@@ -149,7 +149,7 @@ def test_aws_batch_job_definition_fargate_container_properties(
             [
                 ResourceRequirement(
                     type="VCPU",
-                    value="16",  # valid
+                    value="16.0",  # valid
                 ),
                 ResourceRequirement(type="MEMORY", value="invalid-value"),
             ],
