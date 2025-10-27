@@ -30,6 +30,7 @@ from zenml.config.build_configuration import BuildConfiguration
 from zenml.config.step_run_info import StepRunInfo
 from zenml.enums import StackComponentType
 from zenml.logger import get_logger
+from zenml.models import PipelineSnapshotBase
 from zenml.stack import Stack, StackValidator
 from zenml.step_operators import BaseStepOperator
 from zenml.utils.string_utils import random_str
@@ -239,7 +240,9 @@ class AWSBatchStepOperator(BaseStepOperator):
             ),
         )
 
-    def get_docker_builds(self, deployment) -> List["BuildConfiguration"]:
+    def get_docker_builds(
+        self, snapshot: PipelineSnapshotBase
+    ) -> List["BuildConfiguration"]:
         """Gets the Docker builds required for the component.
 
         Args:
@@ -249,7 +252,8 @@ class AWSBatchStepOperator(BaseStepOperator):
             The required Docker builds.
         """
         builds = []
-        for step_name, step in deployment.step_configurations.items():
+
+        for step_name, step in snapshot.step_configurations.items():
             if step.config.uses_step_operator(self.name):
                 build = BuildConfiguration(
                     key=BATCH_DOCKER_IMAGE_KEY,
