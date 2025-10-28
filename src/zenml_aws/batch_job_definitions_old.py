@@ -7,7 +7,7 @@ import boto3
 from rich import inspect, print
 from zenml.config.resource_settings import ByteUnit, ResourceSettings
 from zenml.entrypoints import StepEntrypointConfiguration
-from zenml.models import PipelineSnapshotResponse
+from zenml.models import PipelineDeploymentResponse
 
 
 @dataclass
@@ -28,25 +28,25 @@ class BatchJobDefinitionConfig:
         return f"zenml-{self.step_name}-{self.to_hash()[:8]}"
 
     @classmethod
-    def from_snapshot(
+    def from_deployment(
         cls,
         step_name: str,
-        snapshot: PipelineSnapshotResponse,
+        deployment: PipelineDeploymentResponse,
         environment: Dict[str, str],
-        get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
+        get_image_fn: Callable[[PipelineDeploymentResponse, str], str],
     ) -> "BatchJobDefinitionConfig":
         """Create a BatchJobDefinitionConfig from a ZenML pipeline step.
 
         Args:
             step_name: Name of the pipeline step
-            snapshot: ZenML pipeline deployment
+            deployment: ZenML pipeline deployment
             environment: Environment variables for all steps
             get_image_fn: Function to get Docker image for a step
 
         Returns:
             BatchJobDefinitionConfig for the step
         """
-        step_config = snapshot.step_configurations[step_name]
+        step_config = deployment.step_configurations[step_name]
 
         resource = ResourceSettings(
             # TODO: better declare these defaults somewhere else
@@ -83,12 +83,12 @@ class BatchJobDefinitionConfig:
         command = StepEntrypointConfiguration.get_entrypoint_command()
         arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
             step_name=step_name,
-            deployment_id=snapshot.id,
+            deployment_id=deployment.id,
         )
 
         return cls(
             step_name=step_name,
-            image=get_image_fn(snapshot, step_name),
+            image=get_image_fn(deployment, step_name),
             environment=sorted(environment.items()),
             command=command + arguments,
             cpu=vcpu_value,  # resource.cpu_count,
@@ -122,18 +122,17 @@ class BatchJobDefinitionConfig:
 
 
 def register_equivalent_job_definitions(
-    batch_client: boto3.client,
+    batch_client: "boto3.client",
     execution_role_arn: str,
-    snapshot: PipelineSnapshotResponse,
-    base_environment: Dict[str, str],
-    step_environments: Dict[str, Dict[str, str]],
-    get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
+    deployment: PipelineDeploymentResponse,
+    environment: Dict[str, str],
+    get_image_fn: Callable[[PipelineDeploymentResponse, str], str],
     task_role_arn: Optional[str] = None,
 ) -> Dict[str, str]:
     """Register AWS Batch job definitions for pipeline steps and return mapping."""
     job_def_configs: List[BatchJobDefinitionConfig] = (
         _get_job_def_configs_from_deployment_pipeline(
-            snapshot, base_environment, step_environments, get_image_fn
+            deployment, environment, get_image_fn
         )
     )
 
@@ -186,10 +185,9 @@ def _register_equivalent_job_definitions_for_pipeline(
 
 
 def _get_job_def_configs_from_deployment_pipeline(
-    shapshot: PipelineSnapshotResponse,
-    base_environment: Dict[str, str],
-    step_environments: Dict[str, Dict[str, str]],
-    get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
+    deployment: PipelineDeploymentResponse,
+    environment: Dict[str, str],
+    get_image_fn: Callable[[PipelineDeploymentResponse, str], str],
 ) -> List[BatchJobDefinitionConfig]:
     """Get job definition configs for all steps in a pipeline.
 
@@ -202,13 +200,13 @@ def _get_job_def_configs_from_deployment_pipeline(
         List of job definition configs for all steps
     """
     return [
-        BatchJobDefinitionConfig.from_snapshot(
+        BatchJobDefinitionConfig.from_deployment(
             step_name=step_name,
-            snapshot=shapshot,
-            environment={**base_environment, **step_environments[step_name]},
+            deployment=deployment,
+            environment=environment,
             get_image_fn=get_image_fn,
         )
-        for step_name in shapshot.step_configurations
+        for step_name in deployment.step_configurations
     ]
 
 
