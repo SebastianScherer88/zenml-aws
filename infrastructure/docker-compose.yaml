@@ -7,7 +7,7 @@ services:
       - "8080:8080"
     environment:
       ZENML_DEBUG: true
-      ZENML_STORE_URL: mysql://zenml:password@zenml-metdata-store2fbf804.c1cyu4q20nag.eu-west-1.rds.amazonaws.com:3306/zenml
+      ZENML_STORE_URL: mysql://zenml:password@zenml-metdata-storedbd4e9b.c1cyu4q20nag.eu-west-1.rds.amazonaws.com:3306/zenml
       # for some reason, these do not work:
       # ZENML_DEFAULT_USER_NAME: zenml
       # ZENML_DEFAULT_USER_PASSWORD: password

@@ -1,10 +1,33 @@
+import hashlib
+
+# from zenml_aws.step_operator.aws_batch_step_operator import AWSBatchStepOperator
+# from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import AWSStepFunctionsOrchestratorSettings
+# from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator import AWSStepFunctionsOrchestrator
+import json
 import math
 from string import ascii_letters, digits
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, cast
 
-from pydantic import BaseModel, PositiveInt, field_validator
+from pydantic import (
+    BaseModel,
+    PositiveInt,
+    SerializerFunctionWrapHandler,
+    field_serializer,
+    field_validator,
+    model_serializer,
+)
 from zenml.config import ResourceSettings
+from zenml.config.step_run_info import StepRunInfo
 from zenml.logger import get_logger
+
+from zenml_aws.constants import (
+    AWS_BATCH_JOB_DEFAULT_NAME,
+    BATCH_DOCKER_IMAGE_KEY,
+    AWSBatchTag,
+)
+from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+    AWSBatchStepOperatorSettings,
+)
 
 logger = get_logger(__name__)
 
@@ -37,6 +60,23 @@ class AWSBatchJobDefinitionContainerProperties(BaseModel):
         ResourceRequirement
     ] = []  # keys: 'value','type', with type one of 'GPU','VCPU','MEMORY'
     secrets: List[Dict[str, str]] = []  # keys: 'name','value'
+
+    @model_serializer(mode="wrap")
+    def sort_model(self, handler, info):
+        """We add sorting of environment, secret and resource specs to make
+        this process deterministic."""
+        sorted_model_dict = handler(self)
+        sorted_model_dict["resourceRequirements"] = sorted(
+            sorted_model_dict["resourceRequirements"], key=lambda x: x["type"]
+        )
+        sorted_model_dict["environment"] = sorted(
+            sorted_model_dict["environment"], key=lambda x: x["name"]
+        )
+        sorted_model_dict["secrets"] = sorted(
+            sorted_model_dict["secrets"], key=lambda x: x["name"]
+        )
+
+        return sorted_model_dict
 
 
 class AWSBatchJobDefinitionEC2ContainerProperties(
@@ -146,13 +186,27 @@ class AWSBatchJobDefinitionRetryStrategy(BaseModel):
         },
     ]
 
+    @field_serializer("evaluateOnExit")
+    def sort_evaluate_on_exit(value: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """We add sorting of evaluateOnExit to make serialization of this
+        class deterministic."""
+        list_of_sorted_dicts = [dict(sorted(setting.items())) for setting in value]
+        sorted_list_of_sorted_dicts = sorted(
+            list_of_sorted_dicts, key=lambda d: tuple(sorted(d.items()))
+        )
+        return sorted_list_of_sorted_dicts
+
 
 class AWSBatchJobDefinition(BaseModel):
     """A utility to validate AWS Batch job descriptions. Base class
     for container and multinode job definition types."""
 
-    jobDefinitionName: str
+    jobDefinitionName: str = AWS_BATCH_JOB_DEFAULT_NAME
     type: str = "container"
+    containerProperties: (
+        AWSBatchJobDefinitionEC2ContainerProperties
+        | AWSBatchJobDefinitionFargateContainerProperties
+    )
     parameters: Dict[str, str] = {}
     # schedulingPriority: int = 0 # ignored in FIFO queues
     retryStrategy: AWSBatchJobDefinitionRetryStrategy = (
@@ -164,6 +218,146 @@ class AWSBatchJobDefinition(BaseModel):
     }  # key 'attemptDurationSeconds'
     tags: Dict[str, str] = {}
     platformCapabilities: List[Literal["EC2", "FARGATE"]]
+
+    @classmethod
+    def from_orchestrator(
+        cls,
+        orchestrator: "AWSStepFunctionsOrchestrator",  #  noqa: F821
+    ) -> "AWSBatchJobDefinition":
+        """Utility to instantiate a class instance from the arguments
+        accessible inside the AWSStepFunctionsOrchestrator's `submit_pipeline`
+        method.."""
+
+    @classmethod
+    def from_step_operator(
+        cls,
+        step_operator: "AWSBatchStepOperator",  #  noqa: F821
+        info: StepRunInfo,
+        entrypoint_command: List[str],
+        environment: Dict[str, str],
+    ) -> "AWSBatchJobDefinition":
+        """Utility to instantiate a class instance from the arguments
+        accessible inside the AWSBatchStepOperator's `launch` method.."""
+
+        step_settings = cast(
+            AWSBatchStepOperatorSettings, step_operator.get_settings(info)
+        )
+
+        # if the step's settings include environment variables, update the
+        # pipeline environment variables before submitting
+        if step_settings.environment:
+            environment.update(step_settings.environment)
+
+        # if the step's settings include tags, update the system tags before
+        # submitting
+        tags = cls.generate_tags(info)
+        if step_settings.tags:
+            tags.update(step_settings.tags)
+
+        container_kwargs = {}
+
+        if step_settings.backend == "EC2":
+            AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
+            AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
+
+        elif step_settings.backend == "FARGATE":
+            AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
+            AWSBatchContainerProperties = (
+                AWSBatchJobDefinitionFargateContainerProperties
+            )
+            container_kwargs["networkConfiguration"] = {
+                "assignPublicIp": step_settings.assign_public_ip
+            }
+
+        return AWSBatchJobDefinitionClass(
+            timeout={"attemptDurationSeconds": step_settings.timeout_seconds},
+            type="container",
+            tags=tags,
+            containerProperties=AWSBatchContainerProperties(
+                executionRoleArn=step_operator.config.execution_role,
+                jobRoleArn=step_operator.config.job_role,
+                image=info.get_image(key=BATCH_DOCKER_IMAGE_KEY),
+                command=entrypoint_command,
+                environment=map_environment(environment),
+                resourceRequirements=map_resource_settings(
+                    info.config.resource_settings
+                ),
+                **container_kwargs,
+            ),
+        )
+
+    @staticmethod
+    def generate_tags(info: StepRunInfo) -> dict[str, str]:
+        return {
+            AWSBatchTag.pipeline_name: info.pipeline.name,
+            AWSBatchTag.pipeline_run_id: str(info.run_id),
+            AWSBatchTag.pipeline_run_name: info.run_name,
+            AWSBatchTag.step_name: info.pipeline_step_name,
+            AWSBatchTag.step_run_id: str(info.step_run_id),
+        }
+
+    def generate_name(self, info: StepRunInfo) -> str:
+        """Utility to generate a unique AWS Batch job name.
+
+        Args:
+            info: The step run information.
+
+        Returns:
+            A unique name for the step's AWS Batch job definition
+        """
+
+        # Batch allows 128 alphanumeric characters at maximum for job name.
+        # We sanitize the pipeline and step names before concatenating,
+        # capping at 115 chars and finally suffixing with a 10 character random
+        # string, which (with the two hyphens) leaves us at 127 chars.
+        sanitized_pipeline_name = sanitize_name(info.pipeline.name, 30)
+        sanitized_step_name = sanitize_name(info.pipeline_step_name, 30)
+
+        job_name = f"{sanitized_pipeline_name}-{sanitized_step_name}"
+        return f"{job_name}-{self.to_hash()}"
+
+    def to_hash(self) -> str:
+        """Hashes the AWS Batch Job definition instance to help disambiguate
+        them to avoid needlessly duplicating resources on the AWS side.
+
+        Returns:
+            str: The hash encoding the entire AWS Batch job description.
+        """
+
+        # we exclude the name before hashing as it will include a randomly
+        # generated suffix - see the `generate_name` classmethod.
+        sorted_model_dict = self.model_dump(exclude="jobDefinitionName")
+
+        # we remove the system tags before hashing, as run related metadata
+        # will trivially be different each time
+        non_system_tags = dict(
+            [
+                (k, v)
+                for k, v in sorted_model_dict["tags"].items()
+                if k not in AWSBatchTag.list()
+            ]
+        )
+        sorted_model_dict["tags"] = non_system_tags
+
+        sorted_model_json = json.dumps(sorted_model_dict, sort_keys=True).encode()
+        sorted_model_hash = hashlib.sha256(sorted_model_json).hexdigest()
+
+        return sorted_model_hash
+
+    @model_serializer(mode="wrap")
+    def sort_model(self, handler: SerializerFunctionWrapHandler):
+        """We add sorting of parameters and tags to make the hashing
+        deterministic."""
+        sorted_model_dict = handler(self)
+        sorted_model_dict["tags"] = dict(sorted(sorted_model_dict["tags"].items()))
+        sorted_model_dict["parameters"] = dict(
+            sorted(sorted_model_dict["parameters"].items())
+        )
+        sorted_model_dict["timeout"] = dict(
+            sorted(sorted_model_dict["timeout"].items())
+        )
+
+        return sorted_model_dict
 
 
 class AWSBatchJobEC2Definition(AWSBatchJobDefinition):
@@ -233,10 +427,10 @@ def map_resource_settings(
     return mapped_resource_settings
 
 
-def sanitize_name(name: str) -> bool:
+def sanitize_name(name: str, max_length: int) -> bool:
     valid_characters = ascii_letters + digits + "-_"
     sanitized_name = ""
     for char in name:
         sanitized_name += char if char in valid_characters else "-"
 
-    return sanitized_name
+    return sanitized_name[:max_length]

@@ -27,7 +27,7 @@ from zenml.step_operators.base_step_operator import (
 )
 from zenml.utils.secret_utils import SecretField
 
-from zenml_aws import AWS_BATCH_STEP_OPERATOR_FLAVOR
+from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR
 
 
 class AWSBatchStepOperatorSettings(BaseSettings):
@@ -50,6 +50,12 @@ class AWSBatchStepOperatorSettings(BaseSettings):
         description="The AWS Batch platform capability for the step AWS Batch "
         "job to be orchestrated with. Must be compatible with `job_queue_name`."
         "Defaults to 'FARGATE'.",
+    )
+    tags: dict[str, str] = Field(
+        default=dict(),
+        description="The tags for this step's AWS BatchJobDefinition resource."
+        "For zenml meta tags added automatically, see the "
+        "zenml.constants.AWSBatchTags class.",
     )
     assign_public_ip: Literal["ENABLED", "DISABLED"] = Field(
         default="ENABLED",

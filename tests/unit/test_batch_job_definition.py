@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from zenml.config.resource_settings import ResourceSettings
 
-from zenml_aws.utils import (
+from zenml_aws.batch_job_definition import (
     VALID_FARGATE_MEMORY,
     VALID_FARGATE_VCPU,
     AWSBatchJobDefinitionEC2ContainerProperties,
@@ -55,14 +55,14 @@ def test_map_resource_settings(test_resource_settings, expected):
 
 
 @pytest.mark.parametrize(
-    "test_name,expected",
+    "test_name,test_max_length,expected",
     [
-        ("valid-name-123abcABC_", "valid-name-123abcABC_"),
-        ('this!is@not"a£valid$name%123', "this-is-not-a-valid-name-123"),
+        ("valid-name-123abcABC_test", 21, "valid-name-123abcABC_"),
+        ('this!is@not"a£valid$name%123test', 28, "this-is-not-a-valid-name-123"),
     ],
 )
-def test_sanitize_name(test_name, expected):
-    assert sanitize_name(test_name) == expected
+def test_sanitize_name(test_name, test_max_length, expected):
+    assert sanitize_name(test_name, test_max_length) == expected
 
 
 @pytest.mark.parametrize(
