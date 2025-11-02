@@ -27,5 +27,6 @@ class AWSBatchJobStatus(StrEnum):
     submitted: str = "SUBMITTED"
     runnable: str = "RUNNABLE"
     starting: str = "STARTING"
+    running: str = "RUNNING"
     succeeded: str = "SUCCEEDED"
     failed: str = "FAILED"

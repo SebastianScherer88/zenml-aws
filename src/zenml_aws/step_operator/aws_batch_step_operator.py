@@ -14,6 +14,7 @@
 """Implementation of the AWS Batch Step Operator."""
 
 import time
+from datetime import datetime
 from typing import (
     Dict,
     List,
@@ -292,24 +293,38 @@ class AWSBatchStepOperator(BaseStepOperator):
 
         while wait:
             try:
+                now = datetime.now()
                 response = batch_client.describe_jobs(jobs=[job_id])
                 status = response["jobs"][0]["status"]
                 status_reason = response["jobs"][0].get("statusReason", "Unknown")
 
-                if status == str(AWSBatchJobStatus.succeeded):
-                    logger.info(f"Job completed successfully: {job_id}")
+                if status == str(AWSBatchJobStatus.submitted):
+                    logger.info(f"Job {job_id} submitted successfully @{now}.")
+                elif status == str(AWSBatchJobStatus.runnable):
+                    logger.info(
+                        f"Job {job_id} is runnable and waiting for execution @{now}."
+                    )
+                elif status == str(AWSBatchJobStatus.starting):
+                    logger.info(f"Job {job_id} is starting @{now}.")
+                elif status == str(AWSBatchJobStatus.running):
+                    logger.info(f"Job {job_id} is running @{now}.")
+                elif status == str(AWSBatchJobStatus.succeeded):
+                    logger.info(f"Job {job_id} completed successfully @{now}.")
                     break
                 elif status == AWSBatchJobStatus.failed:
-                    raise RuntimeError(f"Job {job_id} failed: {status_reason}")
+                    raise RuntimeError(
+                        f"Job {job_id} failed with status reason "
+                        f"{status_reason} @{now}"
+                    )
                 else:
                     logger.info(
-                        f"Job {job_id} neither failed nor succeeded. Status: "
-                        f"{status}. Status reason: {status_reason}. Waiting "
-                        "another 10 seconds."
+                        f"Job {job_id} has unknown status: {status}. Reason: "
+                        f"{status_reason} @{now}."
                     )
                     time.sleep(10)
             except ClientError as e:
-                logger.error(f"Failed to describe job {job_id}: {e}")
+                now = datetime.now()
+                logger.error(f"Failed to describe job {job_id}: {e} @{now}")
                 raise
 
     def launch(
