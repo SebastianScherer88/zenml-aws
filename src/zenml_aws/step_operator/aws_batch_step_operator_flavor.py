@@ -51,6 +51,12 @@ class AWSBatchStepOperatorSettings(BaseSettings):
         "job to be orchestrated with. Must be compatible with `job_queue_name`."
         "Defaults to 'FARGATE'.",
     )
+    tags: dict[str, str] = Field(
+        default=dict(),
+        description="The tags for this step's AWS BatchJobDefinition resource."
+        "For zenml meta tags added automatically, see the "
+        "zenml.constants.AWSBatchTags class.",
+    )
     assign_public_ip: Literal["ENABLED", "DISABLED"] = Field(
         default="ENABLED",
         description="Sets the network configuration's assignPublicIp field."
