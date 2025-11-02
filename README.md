@@ -180,5 +180,5 @@ test scripts in the `scripts` directory:
 
 ```bash
 python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-test-ec2-job-queue --memory 1000
-python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2024
+python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2048
 ```
