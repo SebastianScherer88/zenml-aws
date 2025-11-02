@@ -27,8 +27,42 @@ test_ecr_repo = aws.ecr.Repository(
 # --- zenml: artifact-store
 test_s3_bucket = aws.s3.Bucket(
     "zenml-artifact-store",
-    # bucket="zenml-artifact-store",
     force_destroy=True,
+)
+
+current = aws.get_caller_identity()
+
+test_s3_bucket_policy_json = pulumi.Output.all(
+    test_s3_bucket.arn, current.account_id
+).apply(
+    lambda args: json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "AllowSameAccountAccess",
+                    "Effect": "Allow",
+                    "Principal": {"AWS": f"arn:aws:iam::{args[1]}:root"},
+                    "Action": [
+                        "s3:GetObject",
+                        "s3:PutObject",
+                        "s3:DeleteObject",
+                        "s3:ListBucket",
+                    ],
+                    "Resource": [
+                        args[0],  # bucket itself
+                        f"{args[0]}/*",  # all objects
+                    ],
+                }
+            ],
+        }
+    )
+)
+
+test_s3_bucket_policy = aws.s3.BucketPolicy(
+    "zenml-artifact-store-bucket-policy",
+    bucket=test_s3_bucket.id,
+    policy=test_s3_bucket_policy_json,
 )
 
 # --- batch: instance profile

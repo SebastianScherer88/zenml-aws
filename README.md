@@ -71,7 +71,7 @@ docker build -f infrastructure\Dockerfile . -t 743582000746.dkr.ecr.eu-west-1.am
 docker push 743582000746.dkr.ecr.eu-west-1.amazonaws.com/zenml:latest
 ```
 
-## Zenml development stack
+## Zenml `step-operator` and `orchestrator` test stack
 
 Create a `zenml` stack using this library's integrations by running the following
 commands.
@@ -79,7 +79,7 @@ commands.
 Login with the remote SQL zenml store directly:
 
 ```bash
-zenml login mysql://zenml:password@zenml-metdata-store2fbf804.c1cyu4q20nag.eu-west-1.rds.amazonaws.com:3306/zenml
+zenml login mysql://zenml:password@zenml-metdata-storedbd4e9b.c1cyu4q20nag.eu-west-1.rds.amazonaws.com:3306/zenml
 ```
 
 Register the git repository as a local zenml repository:
@@ -88,7 +88,7 @@ Register the git repository as a local zenml repository:
 zenml init
 ```
 
-Register the AWs batch step operator flavour:
+Register the AWS Batch step operator flavour:
 
 ```bash
 zenml step-operator flavor register src.zenml_aws.step_operator.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
@@ -100,16 +100,28 @@ Register the step operator component:
 zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --default_job_queue_name=zenml-test-ec2-job-queue
 ```
 
+Register the AWS Batch orchestrator flavour:
+
+```bash
+zenml orchestrator flavor register zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
+```
+
+Register the orchestrator component:
+
+```bash
+zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --name=stepfunctions-comp
+```
+
 Register a remote type ECR contaier registry component:
 
 ```bash
-zenml container-registry register aws-ecr -f aws  --uri=743582000746.dkr.ecr.eu-west-1.amazonaws.com
+zenml container-registry register aws-ecr -f aws --uri=743582000746.dkr.ecr.eu-west-1.amazonaws.com
 ```
 
 Register a remote type S3 artifact store component:
 
 ```bash
-zenml artifact-store register aws-s3 -f s3 --path=s3://zenml-artifact-store-e425ed8
+zenml artifact-store register aws-s3 -f s3 --path=s3://zenml-artifact-store-6da7888
 ```
 
 Register a `zenml-aws-test` zenml stack with the components:
@@ -133,7 +145,11 @@ zenml step-operator delete aws-batch
 zenml step-operator flavor delete aws_batch
 zenml step-operator flavor register zenml_aws.step_operator.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
 zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --default_job_queue_name=zenml-test-job-queue
-zenml stack register aws-test -a aws-s3 -o default -s aws-batch -c aws-ecr
+zenml orchestrator delete aws-stepfunctions
+zenml orchestrator flavor delete aws_stepfunctions
+zenml orchestrator flavor register zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
+zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --name=stepfunctions-comp
+zenml stack register aws-test -a default -o default -c aws-ecr -s aws-batch -a aws-s3
 zenml stack set aws-test
 ```
 
@@ -164,5 +180,5 @@ test scripts in the `scripts` directory:
 
 ```bash
 python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-test-ec2-job-queue --memory 1000
-python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 1024
+python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2024
 ```
