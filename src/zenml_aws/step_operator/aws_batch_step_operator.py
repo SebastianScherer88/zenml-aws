@@ -321,7 +321,7 @@ class AWSBatchStepOperator(BaseStepOperator):
                         f"Job {job_id} has unknown status: {status}. Reason: "
                         f"{status_reason} @{now}."
                     )
-                    time.sleep(10)
+                time.sleep(10)
             except ClientError as e:
                 now = datetime.now()
                 logger.error(f"Failed to describe job {job_id}: {e} @{now}")
