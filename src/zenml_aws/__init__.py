@@ -3,4 +3,4 @@ from .step_operator import (  # noqa: F401, I001
     AWSBatchStepOperatorFlavor,
     AWSBatchStepOperatorSettings,
 )
-from .batch_job_definition import AWSBatchJobDefinition  # noqa: F401
+from .aws_batch_job_definition import AWSBatchJobDefinition  # noqa: F401
