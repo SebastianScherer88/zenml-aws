@@ -27,7 +27,7 @@ from zenml.step_operators.base_step_operator import (
 )
 from zenml.utils.secret_utils import SecretField
 
-from zenml_aws import AWS_BATCH_STEP_OPERATOR_FLAVOR
+from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR
 
 
 class AWSBatchStepOperatorSettings(BaseSettings):
