@@ -1,5 +1,8 @@
 from enum import StrEnum
 
+AWS_BATCH_STEP_OPERATOR_FLAVOR = "aws_batch"
+AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR = "aws_stepfunctions"
+
 BATCH_DOCKER_IMAGE_KEY = "aws_batch_step_operator"
 _ENTRYPOINT_ENV_VARIABLE = "__ZENML_ENTRYPOINT"
 

@@ -228,14 +228,6 @@ class AWSBatchJobDefinition(BaseModel):
         accessible inside the AWSStepFunctionsOrchestrator's `submit_pipeline`
         method.."""
 
-    #     batch_client: boto3.client,
-    # execution_role_arn: str,
-    # snapshot: PipelineSnapshotResponse,
-    # base_environment: Dict[str, str],
-    # step_environments: Dict[str, Dict[str, str]],
-    # get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
-    # task_role_arn: Optional[str] = None,
-
     @classmethod
     def from_step_operator(
         cls,
