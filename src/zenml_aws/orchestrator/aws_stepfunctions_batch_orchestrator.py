@@ -7,7 +7,6 @@ from collections import deque
 from typing import (
     Any,
     Dict,
-    Iterator,
     List,
     Optional,
     Tuple,
@@ -25,7 +24,7 @@ from zenml.constants import (
 )
 from zenml.enums import StackComponentType
 from zenml.logger import get_logger
-from zenml.metadata.metadata_types import MetadataType, Uri
+from zenml.metadata.metadata_types import MetadataType
 from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
 from zenml.orchestrators import ContainerizedOrchestrator, SubmissionResult
 from zenml.stack import Stack, StackValidator
@@ -33,9 +32,9 @@ from zenml.stack import Stack, StackValidator
 from zenml_aws.batch_job_definitions import register_equivalent_job_definitions
 
 # Custom imports
-from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor_old import (
-    StepFunctionsOrchestratorConfig,
-    StepFunctionsOrchestratorSettings,
+from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
+    AWSStepFunctionsOrchestratorConfig,
+    AWSStepFunctionsOrchestratorSettings,
 )
 
 logger = get_logger(__name__)
@@ -44,50 +43,17 @@ ENV_ZENML_STEP_FUNCTIONS_RUN_ID = "ZENML_STEP_FUNCTIONS_RUN_ID"
 MAX_TASK_DEFINITION_VERSIONS = 50
 
 
-def build_dag_levels(
-    snapshot: PipelineSnapshotResponse,
-) -> List[List[str]]:
-    """Constructs a DAG level representation of pipeline steps."""
-    step_dependencies = {
-        step_name: set(step_config.spec.upstream_steps)
-        for step_name, step_config in snapshot.step_configurations.items()
-    }
-
-    in_degree = {step: len(deps) for step, deps in step_dependencies.items()}
-    queue = deque([step for step, count in in_degree.items() if count == 0])
-    levels = []
-
-    while queue:
-        level = []
-        for _ in range(len(queue)):
-            step = queue.popleft()
-            level.append(step)
-
-            for dependent in step_dependencies:
-                if step in step_dependencies[dependent]:
-                    in_degree[dependent] -= 1
-                    if in_degree[dependent] == 0:
-                        queue.append(dependent)
-
-        levels.append(level)
-
-    if sum(len(level) for level in levels) != len(snapshot.step_configurations):
-        raise RuntimeError("Pipeline contains cycles or invalid dependencies")
-
-    return levels
-
-
-class StepFunctionsOrchestrator(ContainerizedOrchestrator):
+class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
     """Orchestrator responsible for running pipelines on AWS Step Functions."""
 
     @property
-    def config(self) -> StepFunctionsOrchestratorConfig:
+    def config(self) -> AWSStepFunctionsOrchestratorConfig:
         """Returns the `StepFunctionsOrchestratorConfig` config.
 
         Returns:
             The configuration.
         """
-        return cast(StepFunctionsOrchestratorConfig, self._config)
+        return cast(AWSStepFunctionsOrchestratorConfig, self._config)
 
     @property
     def validator(self) -> Optional[StackValidator]:
@@ -153,7 +119,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         Returns:
             The settings class.
         """
-        return StepFunctionsOrchestratorSettings
+        return AWSStepFunctionsOrchestratorSettings
 
     def submit_pipeline(
         self,
@@ -162,7 +128,7 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         base_environment: Dict[str, str],
         step_environments: Dict[str, Dict[str, str]],
         placeholder_run: Optional["PipelineRunResponse"] = None,
-    ) -> Optional[SubmissionResult]:
+    ) -> SubmissionResult:
         """Submits a pipeline to the orchestrator.
 
         This method should only submit the pipeline and not wait for it to
@@ -190,6 +156,9 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
         Returns:
             Optional submission result.
         """
+
+        self.config
+
         STEP_FUNCTIONS_ROLE_ARN = (
             "arn:aws:iam::847068433460:role/zenml-hackathon-step-functions-role"
         )
@@ -207,154 +176,187 @@ class StepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         sfn = boto3.client("stepfunctions", region_name="us-west-2")
         name = "ZenML_Batch_Job_StateMachine_DAG_Script"
-        state_machine_definition = create_state_machine_definition(snapshot)
+        state_machine_definition = self.create_state_machine_definition(snapshot)
 
         print(state_machine_definition)
 
-        try:
-            # Create and execute state machine using helper functions
-            state_machine_arn = create_state_machine_from_definition(
-                sfn_client=sfn,
-                name=name,
-                definition=state_machine_definition,
-                role_arn=STEP_FUNCTIONS_ROLE_ARN,
-            )
+        # Create and execute state machine using helper functions
+        state_machine_arn = self.create_state_machine_from_definition(
+            sfn_client=sfn,
+            name=name,
+            definition=state_machine_definition,
+            role_arn=STEP_FUNCTIONS_ROLE_ARN,
+        )
 
-            execution_arn = start_state_machine_execution(
-                sfn_client=sfn,
-                state_machine_arn=state_machine_arn,
-                pipeline_name=snapshot.pipeline_configuration.name,
-            )
+        execution_arn = self.start_state_machine_execution(
+            sfn_client=sfn,
+            state_machine_arn=state_machine_arn,
+            pipeline_name=snapshot.pipeline_configuration.name,
+        )
 
-            # Generate metadata using the standalone function
-            yield from generate_step_functions_metadata(execution_arn)
+        # Generate metadata using the standalone function
 
-        finally:
-            # Clean up state machine after execution starts
-            try:
-                # sfn.delete_state_machine(stateMachineArn=state_machine_arn)
-                ...
-            except Exception as e:
-                logger.warning(f"Failed to delete state machine: {e}")
+        SubmissionResult(metadata=generate_step_functions_metadata(execution_arn))
 
+        # finally:
+        #     # Clean up state machine after execution starts
+        #     try:
+        #         # sfn.delete_state_machine(stateMachineArn=state_machine_arn)
+        #         ...
+        #     except Exception as e:
+        #         logger.warning(f"Failed to delete state machine: {e}")
 
-def create_state_machine_definition(
-    snapshot: PipelineSnapshotResponse,
-) -> Dict[str, Any]:
-    """
-    Creates an AWS Step Functions state machine for the ZenML pipeline.
-
-    - Uses a **static job definition and job queue**.
-    - Supports **parallel execution** of pipeline steps.
-    """
-
-    # 🔹 Static AWS Batch settings
-    JOB_DEFINITION_NAME = "zenml-fargate-job-def-from-python"
-    JOB_QUEUE_NAME = "zenml-fargate-queue-manual"
-
-    # 🔹 Build DAG levels for parallel execution
-    dag_levels = build_dag_levels(snapshot)
-
-    # 🔹 Define the Step Functions states
-    states = {"Start": {"Type": "Pass", "Next": "Level_0"}}
-
-    # Add each level with parallel branches
-    for level_num, level in enumerate(dag_levels):
-        states[f"Level_{level_num}"] = {
-            "Type": "Parallel",
-            "Branches": [
-                {
-                    "StartAt": step,
-                    "States": {
-                        step: {
-                            "Type": "Task",
-                            "Resource": "arn:aws:states:::batch:submitJob.sync",
-                            "Parameters": {
-                                "JobDefinition": JOB_DEFINITION_NAME,
-                                "JobQueue": JOB_QUEUE_NAME,
-                                "JobName": step,
-                            },
-                            "End": True,
-                        }
-                    },
-                }
-                for step in level
-            ],
-            "Next": f"Level_{level_num + 1}"
-            if level_num < len(dag_levels) - 1
-            else "Success",
+    @staticmethod
+    def build_dag_levels(
+        snapshot: PipelineSnapshotResponse,
+    ) -> List[List[str]]:
+        """Constructs a DAG level representation of pipeline steps."""
+        step_dependencies = {
+            step_name: set(step_config.spec.upstream_steps)
+            for step_name, step_config in snapshot.step_configurations.items()
         }
 
-    # 🔹 Add Success state
-    states.update({"Success": {"Type": "Succeed"}})
+        in_degree = {step: len(deps) for step, deps in step_dependencies.items()}
+        queue = deque([step for step, count in in_degree.items() if count == 0])
+        levels = []
 
-    # 🔹 Define the full state machine JSON
-    definition = {
-        "Comment": f"ZenML Pipeline: {snapshot.pipeline_configuration.name}",
-        "StartAt": "Start",
-        "States": states,
-    }
+        while queue:
+            level = []
+            for _ in range(len(queue)):
+                step = queue.popleft()
+                level.append(step)
 
-    return definition
+                for dependent in step_dependencies:
+                    if step in step_dependencies[dependent]:
+                        in_degree[dependent] -= 1
+                        if in_degree[dependent] == 0:
+                            queue.append(dependent)
 
+            levels.append(level)
 
-def create_state_machine_from_definition(
-    sfn_client: boto3.client,
-    name: str,
-    definition: Dict[str, Any],
-    role_arn: str,
-) -> str:
-    """Create an AWS Step Functions state machine.
+        if sum(len(level) for level in levels) != len(snapshot.step_configurations):
+            raise RuntimeError("Pipeline contains cycles or invalid dependencies")
 
-    Args:
-        sfn_client: Boto3 Step Functions client
-        name: Name of the state machine
-        definition: State machine definition dictionary
-        role_arn: ARN of the IAM role for the state machine
+        return levels
 
-    Returns:
-        The ARN of the created state machine
-    """
-    response = sfn_client.create_state_machine(
-        name=name,
-        definition=json.dumps(definition),
-        roleArn=role_arn,
-        type="STANDARD",
-        tags=[],
-    )
-    state_machine_arn = response["stateMachineArn"]
-    print(f"State Machine ARN: {state_machine_arn}")
-    return state_machine_arn
+    def create_state_machine_from_definition(
+        self,
+        sfn_client: boto3.client,
+        name: str,
+        definition: Dict[str, Any],
+        role_arn: str,
+    ) -> str:
+        """Create an AWS Step Functions state machine.
 
+        Args:
+            sfn_client: Boto3 Step Functions client
+            name: Name of the state machine
+            definition: State machine definition dictionary
+            role_arn: ARN of the IAM role for the state machine
 
-def start_state_machine_execution(
-    sfn_client: boto3.client,
-    state_machine_arn: str,
-    pipeline_name: str,
-) -> str:
-    """Start execution of an AWS Step Functions state machine.
+        Returns:
+            The ARN of the created state machine
+        """
+        response = sfn_client.create_state_machine(
+            name=name,
+            definition=json.dumps(definition),
+            roleArn=role_arn,
+            type="STANDARD",
+            tags=[],
+        )
+        state_machine_arn = response["stateMachineArn"]
+        print(f"State Machine ARN: {state_machine_arn}")
+        return state_machine_arn
 
-    Args:
-        sfn_client: Boto3 Step Functions client
-        state_machine_arn: ARN of the state machine to execute
-        pipeline_name: Name of the ZenML pipeline
+    def start_state_machine_execution(
+        self,
+        sfn_client: boto3.client,
+        state_machine_arn: str,
+        pipeline_name: str,
+    ) -> str:
+        """Start execution of an AWS Step Functions state machine.
 
-    Returns:
-        The ARN of the execution
-    """
-    execution_name = f"zenml-{pipeline_name}-{int(time.time())}"
-    response = sfn_client.start_execution(
-        stateMachineArn=state_machine_arn,
-        name=execution_name,
-    )
-    return response["executionArn"]
+        Args:
+            sfn_client: Boto3 Step Functions client
+            state_machine_arn: ARN of the state machine to execute
+            pipeline_name: Name of the ZenML pipeline
+
+        Returns:
+            The ARN of the execution
+        """
+        execution_name = f"zenml-{pipeline_name}-{int(time.time())}"
+        response = sfn_client.start_execution(
+            stateMachineArn=state_machine_arn,
+            name=execution_name,
+        )
+        return response["executionArn"]
+
+    def create_state_machine_definition(
+        self,
+        snapshot: PipelineSnapshotResponse,
+    ) -> Dict[str, Any]:
+        """
+        Creates an AWS Step Functions state machine for the ZenML pipeline.
+
+        - Uses a **static job definition and job queue**.
+        - Supports **parallel execution** of pipeline steps.
+        """
+
+        # 🔹 Static AWS Batch settings
+        JOB_DEFINITION_NAME = "zenml-fargate-job-def-from-python"
+        JOB_QUEUE_NAME = "zenml-fargate-queue-manual"
+
+        # 🔹 Build DAG levels for parallel execution
+        dag_levels = self.build_dag_levels(snapshot)
+
+        # 🔹 Define the Step Functions states
+        states = {"Start": {"Type": "Pass", "Next": "Level_0"}}
+
+        # Add each level with parallel branches
+        for level_num, level in enumerate(dag_levels):
+            states[f"Level_{level_num}"] = {
+                "Type": "Parallel",
+                "Branches": [
+                    {
+                        "StartAt": step,
+                        "States": {
+                            step: {
+                                "Type": "Task",
+                                "Resource": "arn:aws:states:::batch:submitJob.sync",
+                                "Parameters": {
+                                    "JobDefinition": JOB_DEFINITION_NAME,
+                                    "JobQueue": JOB_QUEUE_NAME,
+                                    "JobName": step,
+                                },
+                                "End": True,
+                            }
+                        },
+                    }
+                    for step in level
+                ],
+                "Next": f"Level_{level_num + 1}"
+                if level_num < len(dag_levels) - 1
+                else "Success",
+            }
+
+        # 🔹 Add Success state
+        states.update({"Success": {"Type": "Succeed"}})
+
+        # 🔹 Define the full state machine JSON
+        definition = {
+            "Comment": f"ZenML Pipeline: {snapshot.pipeline_configuration.name}",
+            "StartAt": "Start",
+            "States": states,
+        }
+
+        return definition
 
 
 def generate_step_functions_metadata(
     execution_arn: str,
-) -> Iterator[Dict[str, MetadataType]]:
+) -> Dict[str, MetadataType]:
     region = execution_arn.split(":")[3]
-    metadata = {
+    return {
         METADATA_ORCHESTRATOR_RUN_ID: execution_arn,
         METADATA_ORCHESTRATOR_URL: (
             f"https://{region}.console.aws.amazon.com/states/home"
@@ -365,4 +367,3 @@ def generate_step_functions_metadata(
             f"?region={region}#logsV2:log-groups/log-group/$252Faws$252Fbatch$252Fjob"
         ),
     }
-    yield {k: Uri(v) for k, v in metadata.items()}
