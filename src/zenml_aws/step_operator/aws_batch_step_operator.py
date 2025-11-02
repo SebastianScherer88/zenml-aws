@@ -35,7 +35,7 @@ from zenml.models import PipelineSnapshotBase
 from zenml.stack import Stack, StackValidator
 from zenml.step_operators import BaseStepOperator
 
-from zenml_aws.batch_job_definition import (
+from zenml_aws.aws_batch_job_definition import (
     AWSBatchJobDefinition,
 )
 from zenml_aws.constants import (

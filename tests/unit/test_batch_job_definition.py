@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from zenml.config.resource_settings import ResourceSettings
 
-from zenml_aws.batch_job_definition import (
+from zenml_aws.aws_batch_job_definition import (
     VALID_FARGATE_MEMORY,
     VALID_FARGATE_VCPU,
     AWSBatchJobDefinitionEC2ContainerProperties,
