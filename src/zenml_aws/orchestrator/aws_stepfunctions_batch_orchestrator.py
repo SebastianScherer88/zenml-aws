@@ -200,7 +200,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             )
             batch_job_definition_revision = existing_job_definition.get("revision", "")
             logger.info(
-                f"Found Existing AWS Batch job definition {job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
+                "Found Existing AWS Batch job definition "
+                f"{job_definition_name}. ARN: {batch_job_definition_arn}. "
+                f"Revision: {batch_job_definition_revision}"
             )
         except IndexError:
             return {}
@@ -209,8 +211,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
     def register_new_job_definition(
         batch_client,
         job_definition: AWSBatchJobDefinition,
-        snapshot: PipelineSnapshotResponse,
-        step_name: str,
+        job_definition_name: str,
     ):
         """Registers a new AWS Batch job definition.
 
@@ -221,9 +222,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         """
 
         batch_job_definition_dict = job_definition.model_dump()
-        job_definition_name = job_definition.generate_name(
-            snapshot.pipeline.name, step_name
-        )
         batch_job_definition_dict["jobDefinitionName"] = job_definition_name
         response = batch_client.register_job_definition(**batch_job_definition_dict)
 
@@ -235,7 +233,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             batch_job_definition_arn = response.get("jobDefinitionArn", "")
             batch_job_definition_revision = response.get("revision", "")
             logger.info(
-                f"Registered AWS Batch job definition {job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
+                "Registered AWS Batch job definition "
+                f"{job_definition_name}. ARN: {batch_job_definition_arn}. "
+                f"Revision: {batch_job_definition_revision}."
             )
         else:
             logger.error(f"Could not register new AWS Batch job definition: {response}")
@@ -306,11 +306,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 )
                 for step_name in snapshot.step_configurations
             }
-            unique_batch_job_definition_name = (
-                step_aws_batch_job_definition.generate_name(
-                    snapshot.pipeline.name, step_name
-                )
-            )
+            unique_batch_job_definition_name = step_aws_batch_job_definition[
+                step_name
+            ].generate_name(snapshot.pipeline.name, step_name)
             step_name_to_unique_job_definition_name[step_name] = (
                 unique_batch_job_definition_name
             )
@@ -323,7 +321,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                     f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
                 )
                 self.register_new_job_definition(
-                    batch_client, step_aws_batch_job_definition, snapshot, step_name
+                    batch_client,
+                    step_aws_batch_job_definition,
+                    unique_batch_job_definition_name,
                 )
 
         # assemble and run as stepfunctions state machine

@@ -229,7 +229,7 @@ class AWSBatchStepOperator(BaseStepOperator):
 
     @staticmethod
     def register_new_job_definition(
-        batch_client, job_definition: AWSBatchJobDefinition, info: StepRunInfo
+        batch_client, job_definition: AWSBatchJobDefinition, job_definition_name: str
     ):
         """Registers a new AWS Batch job definition.
 
@@ -240,9 +240,7 @@ class AWSBatchStepOperator(BaseStepOperator):
         """
 
         batch_job_definition_dict = job_definition.model_dump()
-        job_definition_name = job_definition.generate_name(
-            info.pipeline.name, info.pipeline_step_name
-        )
+
         batch_job_definition_dict["jobDefinitionName"] = job_definition_name
         response = batch_client.register_job_definition(**batch_job_definition_dict)
 
@@ -254,7 +252,9 @@ class AWSBatchStepOperator(BaseStepOperator):
             batch_job_definition_arn = response.get("jobDefinitionArn", "")
             batch_job_definition_revision = response.get("revision", "")
             logger.info(
-                f"Registered AWS Batch job definition {job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
+                f"Registered AWS Batch job definition {job_definition_name}. "
+                f"ARN: {batch_job_definition_arn}. Revision: "
+                f"{batch_job_definition_revision}."
             )
         else:
             logger.error(f"Could not register new AWS Batch job definition: {response}")
@@ -374,7 +374,9 @@ class AWSBatchStepOperator(BaseStepOperator):
                 f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
             )
 
-            self.register_new_job_definition(batch_client, batch_job_definition, info)
+            self.register_new_job_definition(
+                batch_client, batch_job_definition, unique_batch_job_definition_name
+            )
 
         # submit AWS Batch job
         self.submit_job(batch_client, unique_batch_job_definition_name, info)

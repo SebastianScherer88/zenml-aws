@@ -14,19 +14,7 @@ from zenml_aws.constants import AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR
 
 
 class AWSStepFunctionsOrchestratorSettings(BaseSettings):
-    """Settings for the AWS Step Functions Orchestrator.
-
-    Attributes:
-        state_machine_type: Type of state machine (STANDARD/EXPRESS)
-        network_mode: Network mode for the task
-        requires_compatibilities: List of compatibilities for the task
-        tags: Custom tags to apply to resources
-        synchronous: Whether to wait for pipeline completion
-        assign_public_ip: Whether to assign public IP to tasks
-        retry_interval_seconds: Retry interval in seconds
-        max_attempts: Maximum number of attempts
-        backoff_rate: Backoff rate
-    """
+    """Settings for the AWS Step Functions Orchestrator."""
 
     tags: dict[str, str] = Field(
         default=dict(),

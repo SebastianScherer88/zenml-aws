@@ -280,8 +280,8 @@ class AWSBatchJobDefinition(BaseModel):
             type="container",
             tags=step_settings.tags,
             containerProperties=AWSBatchContainerProperties(
-                executionRoleArn=pipeline_config.execution_role,
-                jobRoleArn=pipeline_config.job_role,
+                executionRoleArn=pipeline_config.aws_batch_execution_role,
+                jobRoleArn=pipeline_config.aws_batch_job_role,
                 image=get_image_fn(snapshot, step_name),
                 command=command_and_arguments,
                 environment=map_environment(environment),
