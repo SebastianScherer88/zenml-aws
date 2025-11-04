@@ -13,7 +13,7 @@
 #  permissions and limitations under the License.
 """AWS Batch Step operator flavor."""
 
-from typing import Dict, Literal, Optional, Type
+from typing import Literal, Optional, Type
 
 from pydantic import Field, PositiveInt
 from zenml.config.base_settings import BaseSettings
@@ -33,11 +33,6 @@ from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR
 class AWSBatchStepOperatorSettings(BaseSettings):
     """Settings for the Sagemaker step operator."""
 
-    environment: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Environment variables to pass to the container during "
-        "execution. Example: {'LOG_LEVEL': 'INFO', 'DEBUG_MODE': 'False'}",
-    )
     job_queue_name: str = Field(
         default="",
         description="The AWS Batch job queue to submit the step AWS Batch job"

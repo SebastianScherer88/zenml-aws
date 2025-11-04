@@ -293,7 +293,7 @@ class AWSBatchJobDefinition(BaseModel):
     @classmethod
     def from_step_operator(
         cls,
-        step_operator: BaseStepOperator,  # | "AWSBatchStepOperator",  #  noqa: F821
+        step_operator: BaseStepOperator,
         info: StepRunInfo,
         entrypoint_command: List[str],
         environment: Dict[str, str],
@@ -306,11 +306,6 @@ class AWSBatchJobDefinition(BaseModel):
         )
 
         step_config: AWSBatchStepOperatorConfig = step_operator.config
-
-        # if the step's settings include environment variables, update the
-        # pipeline environment variables before submitting
-        if step_settings.environment:
-            environment.update(step_settings.environment)
 
         # if the step's settings include tags, update the system tags before
         # submitting

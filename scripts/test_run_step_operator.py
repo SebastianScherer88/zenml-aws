@@ -12,19 +12,19 @@ docker_settings = DockerSettings(
 )
 
 
-@step(name="greet", step_operator=True)
+@step(name="greet", step_operator=True, environment={"test-a": "A"})
 def test_greet(name: str) -> str:
     """A simple step that returns a greeting message."""
     return f"Hello {name}!"
 
 
-@step(name="report", step_operator=True)
+@step(name="report", step_operator=True, environment={"test-b": "B"})
 def test_report(message: str) -> str:
     """A simple step that reports on a greeting."""
     return f"The message was '{message}'!"
 
 
-@pipeline(settings={"docker": docker_settings})
+@pipeline(settings={"docker": docker_settings}, environment={"test-c": "C"})
 def test_pipeline(name: str):
     """A simple pipeline with just one step."""
     greeting = test_greet(name)
@@ -54,6 +54,10 @@ def main(backend: str, cpu: str, memory: str, job_queue: str):
         "ZENML_STORE_USERNAME": "zenml",
         "ZENML_STORE_PASSWORD": "password",
     }
+    test_pipeline.configure(
+        settings=pipeline_settings, environment=pipeline_environment
+    )
+
     step_configurations = {
         "greet": {
             "settings": {
@@ -73,12 +77,9 @@ def main(backend: str, cpu: str, memory: str, job_queue: str):
                     backend=backend,
                 ).model_dump(),
             },
+            "environment": {"test-d": "D"},
         },
     }
-    test_pipeline.configure(
-        settings=pipeline_settings, environment=pipeline_environment
-    )
-
     test_pipeline.with_options(
         settings=settings, step_configurations=step_configurations, enable_cache=False
     )("Sebastian")
