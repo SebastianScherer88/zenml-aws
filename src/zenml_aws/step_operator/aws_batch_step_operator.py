@@ -37,8 +37,8 @@ from zenml.step_operators import BaseStepOperator
 
 from zenml_aws.aws_batch_job_definition import (
     AWSBatchJobDefinition,
-    check_existing_job_definition,
-    register_new_job_definition,
+    check_existing_batch_job_definition,
+    register_new_batch_job_definition,
 )
 from zenml_aws.constants import (
     _ENTRYPOINT_ENV_VARIABLE,
@@ -359,6 +359,10 @@ class AWSBatchStepOperator(BaseStepOperator):
         unique_batch_job_definition_name = batch_job_definition.generate_name(
             info.pipeline.name, info.pipeline_step_name
         )
+        batch_job_definition = AWSBatchJobDefinition(
+            jobDefinitionName=unique_batch_job_definition_name,
+            **batch_job_definition.model_dump(exclude="jobDefinitionName"),
+        )
 
         logger.info(f"AWS Batch job definition: {unique_batch_job_definition_name}")
 
@@ -366,8 +370,8 @@ class AWSBatchStepOperator(BaseStepOperator):
         batch_client = boto_session.client("batch")
 
         # check if this job definition already exists
-        existing_job_definition = check_existing_job_definition(
-            batch_client, unique_batch_job_definition_name
+        existing_job_definition = check_existing_batch_job_definition(
+            batch_client, batch_job_definition.jobDefinitionName
         )
 
         # register new job definition if necessary
@@ -376,9 +380,7 @@ class AWSBatchStepOperator(BaseStepOperator):
                 f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
             )
 
-            register_new_job_definition(
-                batch_client, batch_job_definition, unique_batch_job_definition_name
-            )
+            register_new_batch_job_definition(batch_client, batch_job_definition)
 
         # submit AWS Batch job
         self.submit_job(batch_client, unique_batch_job_definition_name, info)

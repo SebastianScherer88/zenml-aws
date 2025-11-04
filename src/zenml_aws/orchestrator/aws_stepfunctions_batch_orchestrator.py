@@ -4,6 +4,7 @@ import json
 import os
 import time
 from collections import deque
+from datetime import datetime
 from typing import (
     Any,
     Dict,
@@ -32,14 +33,17 @@ from zenml.stack import Stack, StackValidator
 
 from zenml_aws.aws_batch_job_definition import (
     AWSBatchJobDefinition,
-    check_existing_job_definition,
-    register_new_job_definition,
+    check_existing_batch_job_definition,
+    register_new_batch_job_definition,
 )
 
 # Custom imports
 from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
     AWSStepFunctionsOrchestratorConfig,
     AWSStepFunctionsOrchestratorSettings,
+)
+from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+    AWSBatchStepOperatorSettings,
 )
 
 logger = get_logger(__name__)
@@ -283,51 +287,44 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         boto_session = self._get_aws_session()
         batch_client = boto_session.client("batch")
 
-        STEP_FUNCTIONS_ROLE_ARN = (
-            "arn:aws:iam::847068433460:role/zenml-hackathon-step-functions-role"
-        )
-
-        # step_names_to_job_defs: Dict[str, str] = (  # noqa: F841
-        #     register_equivalent_job_definitions(
-        #         batch_client=boto3.client("batch", region_name="us-west-2"),
-        #         execution_role_arn=STEP_FUNCTIONS_ROLE_ARN,
-        #         snapshot=snapshot,
-        #         base_environment=base_environment,
-        #         step_environments=step_environments,
-        #         get_image_fn=self.get_image,
-        #     )
+        # STEP_FUNCTIONS_ROLE_ARN = (
+        #     "arn:aws:iam::847068433460:role/zenml-hackathon-step-functions-role"
         # )
         step_name_to_unique_job_definition_name: dict[str, str] = {}
 
-        for step_name in snapshot.step_configurations:
-            step_aws_batch_job_definition = {
-                step_name: AWSBatchJobDefinition.from_orchestrator(
-                    orchestrator=self,
-                    step_name=step_name,
-                    snapshot=snapshot,
-                    base_environment=base_environment,
-                    get_image_fn=self.get_image,
+        for step_name, step in snapshot.step_configurations.items():
+            step_environment = {**base_environment, **step_environments[step_name]}
+
+            step_aws_batch_job_definition = AWSBatchJobDefinition.from_orchestrator(
+                orchestrator=self,
+                step=step,
+                snapshot=snapshot,
+                environment=step_environment,
+                get_image_fn=self.get_image,
+            )
+            unique_batch_job_definition_name = (
+                step_aws_batch_job_definition.generate_name(
+                    snapshot.pipeline.name, step_name
                 )
-                for step_name in snapshot.step_configurations
-            }
-            unique_batch_job_definition_name = step_aws_batch_job_definition[
-                step_name
-            ].generate_name(snapshot.pipeline.name, step_name)
+            )
+            step_aws_batch_job_definition = AWSBatchJobDefinition(
+                jobDefinitionName=unique_batch_job_definition_name,
+                **step_aws_batch_job_definition.model_dump(exclude="jobDefinitionName"),
+            )
             step_name_to_unique_job_definition_name[step_name] = (
                 unique_batch_job_definition_name
             )
 
-            existing_job_definition = check_existing_job_definition(
+            existing_job_definition = check_existing_batch_job_definition(
                 batch_client, unique_batch_job_definition_name
             )
             if not existing_job_definition:
                 logger.info(
                     f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
                 )
-                register_new_job_definition(
+                register_new_batch_job_definition(
                     batch_client,
                     step_aws_batch_job_definition,
-                    unique_batch_job_definition_name,
                 )
 
         # assemble and run as stepfunctions state machine
@@ -339,16 +336,16 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         print(state_machine_definition)
 
         # Create and execute state machine using helper functions
-        stepfunctions_client = boto_session.client("stepfunctions")
+        stepfunction_client = boto_session.client("stepfunctions")
         state_machine_arn = self.create_state_machine_from_definition(
-            sfn_client=stepfunctions_client,
+            stepfunction_client=stepfunction_client,
             name=name,
             definition=state_machine_definition,
-            role_arn=STEP_FUNCTIONS_ROLE_ARN,
+            # role_arn=STEP_FUNCTIONS_ROLE_ARN,
         )
 
         execution_arn = self.start_state_machine_execution(
-            sfn_client=stepfunctions_client,
+            sfn_client=stepfunction_client,
             state_machine_arn=state_machine_arn,
             pipeline_name=snapshot.pipeline_configuration.name,
         )
@@ -400,7 +397,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
     def create_state_machine_from_definition(
         self,
-        snapshot: PipelineSnapshotResponse,
         stepfunction_client: boto3.client,
         name: str,
         definition: Dict[str, Any],
@@ -421,15 +417,23 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             definition=json.dumps(definition),
             roleArn=self.config.aws_stepfunctions_execution_role,
             type="STANDARD",
-            tags=snapshot.pipeline_configuration.settings["orchestrator"].tags,
+            tags=self.config.tags,
         )
-        state_machine_arn = response["stateMachineArn"]
-        print(f"State Machine ARN: {state_machine_arn}")
+        try:
+            state_machine_arn = response["stateMachineArn"]
+            logger.info(
+                f"Created AWS Stepfunctions state machine. ARN: {state_machine_arn} @{datetime.now()}"
+            )
+        except KeyError as e:
+            logger.info(
+                f"Failed to create AWS Stepfunctions state machine @{datetime.now()}"
+            )
+            raise e
         return state_machine_arn
 
     def start_state_machine_execution(
         self,
-        sfn_client: boto3.client,
+        stepfunction_client: boto3.client,
         state_machine_arn: str,
         pipeline_name: str,
     ) -> str:
@@ -445,7 +449,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         """
 
         execution_name = f"zenml-{pipeline_name}-{int(time.time())}"
-        response = sfn_client.start_execution(
+        response = stepfunction_client.start_execution(
             stateMachineArn=state_machine_arn,
             name=execution_name,
         )
@@ -454,6 +458,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
     def create_state_machine_definition(
         self,
         snapshot: PipelineSnapshotResponse,
+        step_name_to_unique_job_definition_name: dict[str, str],
     ) -> Dict[str, Any]:
         """
         Creates an AWS Step Functions state machine for the ZenML pipeline.
@@ -462,9 +467,16 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         - Supports **parallel execution** of pipeline steps.
         """
 
-        # 🔹 Static AWS Batch settings
-        JOB_DEFINITION_NAME = "zenml-fargate-job-def-from-python"
-        JOB_QUEUE_NAME = "zenml-fargate-queue-manual"
+        # # 🔹 Static AWS Batch settings
+        # JOB_DEFINITION_NAME = "zenml-fargate-job-def-from-python"
+        # JOB_QUEUE_NAME = "zenml-fargate-queue-manual"
+
+        # pipeline_settings = cast(
+        #     AWSStepFunctionsOrchestratorSettings, self.get_settings(snapshot)
+        # )
+        # pipeline_configuration: AWSStepFunctionsOrchestratorConfig = (
+        #     snapshot.pipeline_configuration
+        # )
 
         # 🔹 Build DAG levels for parallel execution
         dag_levels = self.build_dag_levels(snapshot)
@@ -484,8 +496,13 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                                 "Type": "Task",
                                 "Resource": "arn:aws:states:::batch:submitJob.sync",
                                 "Parameters": {
-                                    "JobDefinition": JOB_DEFINITION_NAME,
-                                    "JobQueue": JOB_QUEUE_NAME,
+                                    "JobDefinition": step_name_to_unique_job_definition_name[
+                                        step
+                                    ],
+                                    "JobQueue": cast(
+                                        AWSBatchStepOperatorSettings,
+                                        self.get_settings(step),
+                                    ).job_queue_name,
                                     "JobName": step,
                                 },
                                 "End": True,
