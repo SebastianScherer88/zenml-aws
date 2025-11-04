@@ -37,6 +37,8 @@ from zenml.step_operators import BaseStepOperator
 
 from zenml_aws.aws_batch_job_definition import (
     AWSBatchJobDefinition,
+    check_existing_job_definition,
+    register_new_job_definition,
 )
 from zenml_aws.constants import (
     _ENTRYPOINT_ENV_VARIABLE,
@@ -189,75 +191,75 @@ class AWSBatchStepOperator(BaseStepOperator):
 
         return builds
 
-    @staticmethod
-    def check_existing_job_definition(batch_client, job_definition_name: str) -> dict:
-        """Checks AWS for an active AWS Batch job definition under the give name.
+    # @staticmethod
+    # def check_existing_job_definition(batch_client, job_definition_name: str) -> dict:
+    #     """Checks AWS for an active AWS Batch job definition under the give name.
 
-        Args:
-            batch_client (_type_): The AWS Batch client instance
-            job_definition_name (str): The name of the AWS Batch job definition
+    #     Args:
+    #         batch_client (_type_): The AWS Batch client instance
+    #         job_definition_name (str): The name of the AWS Batch job definition
 
-        Returns:
-            dict: The latest AWS Batch job definition found, or an empty dict
-                otherwise.
-        """
+    #     Returns:
+    #         dict: The latest AWS Batch job definition found, or an empty dict
+    #             otherwise.
+    #     """
 
-        response = batch_client.describe_job_definitions(
-            jobDefinitionName=job_definition_name, status="ACTIVE"
-        )
+    #     response = batch_client.describe_job_definitions(
+    #         jobDefinitionName=job_definition_name, status="ACTIVE"
+    #     )
 
-        batch_job_definitions = response.get(
-            "jobDefinitions",
-            [
-                {},
-            ],
-        )
+    #     batch_job_definitions = response.get(
+    #         "jobDefinitions",
+    #         [
+    #             {},
+    #         ],
+    #     )
 
-        try:
-            existing_job_definition = sorted(
-                batch_job_definitions, key=lambda revision: revision["revision"]
-            )[0]
-            batch_job_definition_arn = existing_job_definition.get(
-                "jobDefinitionArn", ""
-            )
-            batch_job_definition_revision = existing_job_definition.get("revision", "")
-            logger.info(
-                f"Found Existing AWS Batch job definition {job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
-            )
-        except IndexError:
-            return {}
+    #     try:
+    #         existing_job_definition = sorted(
+    #             batch_job_definitions, key=lambda revision: revision["revision"]
+    #         )[0]
+    #         batch_job_definition_arn = existing_job_definition.get(
+    #             "jobDefinitionArn", ""
+    #         )
+    #         batch_job_definition_revision = existing_job_definition.get("revision", "")
+    #         logger.info(
+    #             f"Found Existing AWS Batch job definition {job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
+    #         )
+    #     except IndexError:
+    #         return {}
 
-    @staticmethod
-    def register_new_job_definition(
-        batch_client, job_definition: AWSBatchJobDefinition, job_definition_name: str
-    ):
-        """Registers a new AWS Batch job definition.
+    # @staticmethod
+    # def register_new_job_definition(
+    #     batch_client, job_definition: AWSBatchJobDefinition, job_definition_name: str
+    # ):
+    #     """Registers a new AWS Batch job definition.
 
-        Args:
-            batch_client (_type_): The AWS Batch client instance
-            job_definition (AWSBatchJobDefinition): The name of the AWS Batch job definition
-            info (StepRunInfo): The step operator's info.
-        """
+    #     Args:
+    #         batch_client (_type_): The AWS Batch client instance
+    #         job_definition (AWSBatchJobDefinition): The name of the AWS Batch job definition
+    #         info (StepRunInfo): The step operator's info.
+    #     """
 
-        batch_job_definition_dict = job_definition.model_dump()
+    #     batch_job_definition_dict = job_definition.model_dump()
 
-        batch_job_definition_dict["jobDefinitionName"] = job_definition_name
-        response = batch_client.register_job_definition(**batch_job_definition_dict)
+    #     batch_job_definition_dict["jobDefinitionName"] = job_definition_name
+    #     response = batch_client.register_job_definition(**batch_job_definition_dict)
 
-        batch_job_definition_registered_successfully = (
-            response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 200
-        ) and "jobDefinitionArn" in response
+    #     batch_job_definition_registered_successfully = (
+    #         response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 200
+    #     ) and "jobDefinitionArn" in response
 
-        if batch_job_definition_registered_successfully:
-            batch_job_definition_arn = response.get("jobDefinitionArn", "")
-            batch_job_definition_revision = response.get("revision", "")
-            logger.info(
-                f"Registered AWS Batch job definition {job_definition_name}. "
-                f"ARN: {batch_job_definition_arn}. Revision: "
-                f"{batch_job_definition_revision}."
-            )
-        else:
-            logger.error(f"Could not register new AWS Batch job definition: {response}")
+    #     if batch_job_definition_registered_successfully:
+    #         batch_job_definition_arn = response.get("jobDefinitionArn", "")
+    #         batch_job_definition_revision = response.get("revision", "")
+    #         logger.info(
+    #             f"Registered AWS Batch job definition {job_definition_name}. "
+    #             f"ARN: {batch_job_definition_arn}. Revision: "
+    #             f"{batch_job_definition_revision}."
+    #         )
+    #     else:
+    #         logger.error(f"Could not register new AWS Batch job definition: {response}")
 
     def submit_job(
         self,
@@ -364,7 +366,7 @@ class AWSBatchStepOperator(BaseStepOperator):
         batch_client = boto_session.client("batch")
 
         # check if this job definition already exists
-        existing_job_definition = self.check_existing_job_definition(
+        existing_job_definition = check_existing_job_definition(
             batch_client, unique_batch_job_definition_name
         )
 
@@ -374,7 +376,7 @@ class AWSBatchStepOperator(BaseStepOperator):
                 f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
             )
 
-            self.register_new_job_definition(
+            register_new_job_definition(
                 batch_client, batch_job_definition, unique_batch_job_definition_name
             )
 
