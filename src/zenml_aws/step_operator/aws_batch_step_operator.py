@@ -240,7 +240,9 @@ class AWSBatchStepOperator(BaseStepOperator):
         """
 
         batch_job_definition_dict = job_definition.model_dump()
-        job_definition_name = job_definition.generate_name(info)
+        job_definition_name = job_definition.generate_name(
+            info.pipeline.name, info.pipeline_step_name
+        )
         batch_job_definition_dict["jobDefinitionName"] = job_definition_name
         response = batch_client.register_job_definition(**batch_job_definition_dict)
 
@@ -352,7 +354,9 @@ class AWSBatchStepOperator(BaseStepOperator):
             entrypoint_command=entrypoint_command,
             environment=environment,
         )
-        unique_batch_job_definition_name = batch_job_definition.generate_name(info=info)
+        unique_batch_job_definition_name = batch_job_definition.generate_name(
+            info.pipeline.name, info.pipeline_step_name
+        )
 
         logger.info(f"AWS Batch job definition: {unique_batch_job_definition_name}")
 

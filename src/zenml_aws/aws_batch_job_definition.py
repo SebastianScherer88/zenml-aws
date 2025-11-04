@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 from string import ascii_letters, digits
-from typing import Dict, List, Literal, cast
+from typing import Callable, Dict, List, Literal, cast
 
 from pydantic import (
     BaseModel,
@@ -17,15 +17,24 @@ from pydantic import (
     model_serializer,
 )
 from zenml.config import ResourceSettings
+from zenml.config.step_configurations import Step
 from zenml.config.step_run_info import StepRunInfo
+from zenml.entrypoints import StepEntrypointConfiguration
 from zenml.logger import get_logger
+from zenml.models import PipelineSnapshotResponse
+from zenml.orchestrators import ContainerizedOrchestrator
+from zenml.step_operators import BaseStepOperator
 
 from zenml_aws.constants import (
     AWS_BATCH_JOB_DEFAULT_NAME,
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchTag,
 )
+from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
+    AWSStepFunctionsOrchestratorConfig,
+)
 from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+    AWSBatchStepOperatorConfig,
     AWSBatchStepOperatorSettings,
 )
 
@@ -222,16 +231,69 @@ class AWSBatchJobDefinition(BaseModel):
     @classmethod
     def from_orchestrator(
         cls,
-        orchestrator: "AWSStepFunctionsOrchestrator",  #  noqa: F821
+        orchestrator: ContainerizedOrchestrator,  # | "AWSBatchOrchestrator",
+        step_name: str,
+        snapshot: PipelineSnapshotResponse,
+        base_environment: Dict[str, str],
+        get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
     ) -> "AWSBatchJobDefinition":
         """Utility to instantiate a class instance from the arguments
         accessible inside the AWSStepFunctionsOrchestrator's `submit_pipeline`
         method.."""
 
+        pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
+        step_config: Step = snapshot.step_configurations[step_name]
+        step_resource_settings: ResourceSettings = step_config.config.resource_settings
+
+        # assemble container command
+        command = StepEntrypointConfiguration.get_entrypoint_command()
+        arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
+            step_name=step_name,
+            deployment_id=snapshot.id,
+        )
+        command_and_arguments = command + arguments
+
+        # step settings (AWSBatchStepOperatorSettings)
+        step_settings: AWSBatchStepOperatorSettings = step_config.config.settings
+
+        # assemble environment
+        step_environment = step_config.config.environment
+        environment = {**base_environment, **step_environment}
+
+        container_kwargs = {}
+
+        if step_settings.backend == "EC2":
+            AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
+            AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
+
+        elif step_settings.backend == "FARGATE":
+            AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
+            AWSBatchContainerProperties = (
+                AWSBatchJobDefinitionFargateContainerProperties
+            )
+            container_kwargs["networkConfiguration"] = {
+                "assignPublicIp": step_settings.assign_public_ip
+            }
+
+        return AWSBatchJobDefinitionClass(
+            timeout={"attemptDurationSeconds": step_settings.timeout_seconds},
+            type="container",
+            tags=step_settings.tags,
+            containerProperties=AWSBatchContainerProperties(
+                executionRoleArn=pipeline_config.execution_role,
+                jobRoleArn=pipeline_config.job_role,
+                image=get_image_fn(snapshot, step_name),
+                command=command_and_arguments,
+                environment=map_environment(environment),
+                resourceRequirements=map_resource_settings(step_resource_settings),
+                **container_kwargs,
+            ),
+        )
+
     @classmethod
     def from_step_operator(
         cls,
-        step_operator: "AWSBatchStepOperator",  #  noqa: F821
+        step_operator: BaseStepOperator,  # | "AWSBatchStepOperator",  #  noqa: F821
         info: StepRunInfo,
         entrypoint_command: List[str],
         environment: Dict[str, str],
@@ -242,6 +304,8 @@ class AWSBatchJobDefinition(BaseModel):
         step_settings = cast(
             AWSBatchStepOperatorSettings, step_operator.get_settings(info)
         )
+
+        step_config: AWSBatchStepOperatorConfig = step_operator.config
 
         # if the step's settings include environment variables, update the
         # pipeline environment variables before submitting
@@ -274,8 +338,8 @@ class AWSBatchJobDefinition(BaseModel):
             type="container",
             tags=tags,
             containerProperties=AWSBatchContainerProperties(
-                executionRoleArn=step_operator.config.execution_role,
-                jobRoleArn=step_operator.config.job_role,
+                executionRoleArn=step_config.execution_role,
+                jobRoleArn=step_config.job_role,
                 image=info.get_image(key=BATCH_DOCKER_IMAGE_KEY),
                 command=entrypoint_command,
                 environment=map_environment(environment),
@@ -296,7 +360,7 @@ class AWSBatchJobDefinition(BaseModel):
             AWSBatchTag.step_run_id: str(info.step_run_id),
         }
 
-    def generate_name(self, info: StepRunInfo) -> str:
+    def generate_name(self, pipeline_name: str, step_name: str) -> str:
         """Utility to generate a unique AWS Batch job name.
 
         Args:
@@ -310,8 +374,8 @@ class AWSBatchJobDefinition(BaseModel):
         # We sanitize the pipeline and step names before concatenating,
         # capping at 115 chars and finally suffixing with a 10 character random
         # string, which (with the two hyphens) leaves us at 127 chars.
-        sanitized_pipeline_name = sanitize_name(info.pipeline.name, 30)
-        sanitized_step_name = sanitize_name(info.pipeline_step_name, 30)
+        sanitized_pipeline_name = sanitize_name(pipeline_name, 30)
+        sanitized_step_name = sanitize_name(step_name, 30)
 
         job_name = f"{sanitized_pipeline_name}-{sanitized_step_name}"
         return f"{job_name}-{self.to_hash()}"

@@ -45,21 +45,43 @@ def test_pipeline(name: str):
 def main(backend: str, cpu: str, memory: str, job_queue: str):
     click.echo(f"{backend}, {cpu}, {memory}, {job_queue}")
 
-    step_settings = {
+    pipeline_settings = settings = {
         "resources": ResourceSettings(
             cpu_count=cpu, memory=f"{memory}MiB"
         ).model_dump(),
-        "step_operator.aws_batch": AWSBatchStepOperatorSettings(
-            job_queue_name=job_queue,
-            backend=backend,
-            environment={
-                "ZENML_STORE_USERNAME": "zenml",
-                "ZENML_STORE_PASSWORD": "password",
-            },
-        ).model_dump(),
     }
+    pipeline_environment = {
+        "ZENML_STORE_USERNAME": "zenml",
+        "ZENML_STORE_PASSWORD": "password",
+    }
+    step_configurations = {
+        "greet": {
+            "settings": {
+                "step_operator": AWSBatchStepOperatorSettings(
+                    job_queue_name=job_queue,
+                    backend=backend,
+                ).model_dump(),
+            },
+        },
+        "report": {
+            "settings": {
+                "resources": ResourceSettings(
+                    cpu_count=2 * cpu, memory=f"{2*memory}MiB"
+                ),
+                "step_operator": AWSBatchStepOperatorSettings(
+                    job_queue_name=job_queue,
+                    backend=backend,
+                ).model_dump(),
+            },
+        },
+    }
+    test_pipeline.configure(
+        settings=pipeline_settings, environment=pipeline_environment
+    )
 
-    test_pipeline.with_options(settings=step_settings, enable_cache=False)("Sebastian")
+    test_pipeline.with_options(
+        settings=settings, step_configurations=step_configurations, enable_cache=False
+    )("Sebastian")
 
 
 if __name__ == "__main__":

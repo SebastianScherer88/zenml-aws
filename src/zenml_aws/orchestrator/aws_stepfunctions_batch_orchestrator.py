@@ -15,6 +15,7 @@ from typing import (
 )
 
 import boto3
+from boto3 import Session
 from rich import print
 from zenml.config.base_settings import BaseSettings
 from zenml.constants import (
@@ -29,7 +30,7 @@ from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
 from zenml.orchestrators import ContainerizedOrchestrator, SubmissionResult
 from zenml.stack import Stack, StackValidator
 
-from zenml_aws.batch_job_definitions import register_equivalent_job_definitions
+from zenml_aws.aws_batch_job_definition import AWSBatchJobDefinition
 
 # Custom imports
 from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
@@ -121,6 +122,124 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         """
         return AWSStepFunctionsOrchestratorSettings
 
+    def _get_aws_session(self) -> Session:
+        """Method to create the AWS Batch session with proper authentication.
+
+        Returns:
+            The AWS Batch session.
+
+        Raises:
+            RuntimeError: If the connector returns the wrong type for the
+                session.
+        """
+        # Get authenticated session
+        # Option 1: Service connector
+        boto_session: Session
+        if connector := self.get_connector():
+            boto_session = connector.connect()
+            if not isinstance(boto_session, Session):
+                raise RuntimeError(
+                    f"Expected to receive a `boto3.Session` object from the "
+                    f"linked connector, but got type `{type(boto_session)}`."
+                )
+        # Option 2: Explicit configuration
+        # Args that are not provided will be taken from the default AWS config.
+        else:
+            boto_session = Session(
+                aws_access_key_id=self.config.aws_access_key_id,
+                aws_secret_access_key=self.config.aws_secret_access_key,
+                region_name=self.config.region,
+                profile_name=self.config.aws_profile,
+            )
+            # If a role ARN is provided for authentication, assume the role
+            if self.config.aws_auth_role_arn:
+                sts = boto_session.client("sts")
+                response = sts.assume_role(
+                    RoleArn=self.config.aws_auth_role_arn,
+                    RoleSessionName="zenml-aws-batch-step-operator",
+                )
+                credentials = response["Credentials"]
+                boto_session = Session(
+                    aws_access_key_id=credentials["AccessKeyId"],
+                    aws_secret_access_key=credentials["SecretAccessKey"],
+                    aws_session_token=credentials["SessionToken"],
+                    region_name=self.config.region,
+                )
+        return boto_session
+
+    @staticmethod
+    def check_existing_job_definition(batch_client, job_definition_name: str) -> dict:
+        """Checks AWS for an active AWS Batch job definition under the give name.
+
+        Args:
+            batch_client (_type_): The AWS Batch client instance
+            job_definition_name (str): The name of the AWS Batch job definition
+
+        Returns:
+            dict: The latest AWS Batch job definition found, or an empty dict
+                otherwise.
+        """
+
+        response = batch_client.describe_job_definitions(
+            jobDefinitionName=job_definition_name, status="ACTIVE"
+        )
+
+        batch_job_definitions = response.get(
+            "jobDefinitions",
+            [
+                {},
+            ],
+        )
+
+        try:
+            existing_job_definition = sorted(
+                batch_job_definitions, key=lambda revision: revision["revision"]
+            )[0]
+            batch_job_definition_arn = existing_job_definition.get(
+                "jobDefinitionArn", ""
+            )
+            batch_job_definition_revision = existing_job_definition.get("revision", "")
+            logger.info(
+                f"Found Existing AWS Batch job definition {job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
+            )
+        except IndexError:
+            return {}
+
+    @staticmethod
+    def register_new_job_definition(
+        batch_client,
+        job_definition: AWSBatchJobDefinition,
+        snapshot: PipelineSnapshotResponse,
+        step_name: str,
+    ):
+        """Registers a new AWS Batch job definition.
+
+        Args:
+            batch_client (_type_): The AWS Batch client instance
+            job_definition (AWSBatchJobDefinition): The name of the AWS Batch job definition
+            info (StepRunInfo): The step operator's info.
+        """
+
+        batch_job_definition_dict = job_definition.model_dump()
+        job_definition_name = job_definition.generate_name(
+            snapshot.pipeline.name, step_name
+        )
+        batch_job_definition_dict["jobDefinitionName"] = job_definition_name
+        response = batch_client.register_job_definition(**batch_job_definition_dict)
+
+        batch_job_definition_registered_successfully = (
+            response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 200
+        ) and "jobDefinitionArn" in response
+
+        if batch_job_definition_registered_successfully:
+            batch_job_definition_arn = response.get("jobDefinitionArn", "")
+            batch_job_definition_revision = response.get("revision", "")
+            logger.info(
+                f"Registered AWS Batch job definition {job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
+            )
+        else:
+            logger.error(f"Could not register new AWS Batch job definition: {response}")
+
     def submit_pipeline(
         self,
         snapshot: PipelineSnapshotResponse,
@@ -128,7 +247,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         base_environment: Dict[str, str],
         step_environments: Dict[str, Dict[str, str]],
         placeholder_run: Optional["PipelineRunResponse"] = None,
-    ) -> SubmissionResult:
+    ) -> Optional[SubmissionResult]:
         """Submits a pipeline to the orchestrator.
 
         This method should only submit the pipeline and not wait for it to
@@ -157,39 +276,75 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             Optional submission result.
         """
 
-        self.config
+        boto_session = self._get_aws_session()
+        batch_client = boto_session.client("batch")
 
         STEP_FUNCTIONS_ROLE_ARN = (
             "arn:aws:iam::847068433460:role/zenml-hackathon-step-functions-role"
         )
 
-        step_names_to_job_defs: Dict[str, str] = (  # noqa: F841
-            register_equivalent_job_definitions(
-                batch_client=boto3.client("batch", region_name="us-west-2"),
-                execution_role_arn=STEP_FUNCTIONS_ROLE_ARN,
-                snapshot=snapshot,
-                base_environment=base_environment,
-                step_environments=step_environments,
-                get_image_fn=self.get_image,
-            )
-        )
+        # step_names_to_job_defs: Dict[str, str] = (  # noqa: F841
+        #     register_equivalent_job_definitions(
+        #         batch_client=boto3.client("batch", region_name="us-west-2"),
+        #         execution_role_arn=STEP_FUNCTIONS_ROLE_ARN,
+        #         snapshot=snapshot,
+        #         base_environment=base_environment,
+        #         step_environments=step_environments,
+        #         get_image_fn=self.get_image,
+        #     )
+        # )
+        step_name_to_unique_job_definition_name: dict[str, str] = {}
 
-        sfn = boto3.client("stepfunctions", region_name="us-west-2")
+        for step_name in snapshot.step_configurations:
+            step_aws_batch_job_definition = {
+                step_name: AWSBatchJobDefinition.from_orchestrator(
+                    orchestrator=self,
+                    step_name=step_name,
+                    snapshot=snapshot,
+                    base_environment=base_environment,
+                    get_image_fn=self.get_image,
+                )
+                for step_name in snapshot.step_configurations
+            }
+            unique_batch_job_definition_name = (
+                step_aws_batch_job_definition.generate_name(
+                    snapshot.pipeline.name, step_name
+                )
+            )
+            step_name_to_unique_job_definition_name[step_name] = (
+                unique_batch_job_definition_name
+            )
+
+            existing_job_definition = self.check_existing_job_definition(
+                batch_client, unique_batch_job_definition_name
+            )
+            if not existing_job_definition:
+                logger.info(
+                    f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
+                )
+                self.register_new_job_definition(
+                    batch_client, step_aws_batch_job_definition, snapshot, step_name
+                )
+
+        # assemble and run as stepfunctions state machine
         name = "ZenML_Batch_Job_StateMachine_DAG_Script"
-        state_machine_definition = self.create_state_machine_definition(snapshot)
+        state_machine_definition = self.create_state_machine_definition(
+            snapshot, step_name_to_unique_job_definition_name
+        )
 
         print(state_machine_definition)
 
         # Create and execute state machine using helper functions
+        stepfunctions_client = boto_session.client("stepfunctions")
         state_machine_arn = self.create_state_machine_from_definition(
-            sfn_client=sfn,
+            sfn_client=stepfunctions_client,
             name=name,
             definition=state_machine_definition,
             role_arn=STEP_FUNCTIONS_ROLE_ARN,
         )
 
         execution_arn = self.start_state_machine_execution(
-            sfn_client=sfn,
+            sfn_client=stepfunctions_client,
             state_machine_arn=state_machine_arn,
             pipeline_name=snapshot.pipeline_configuration.name,
         )
@@ -241,10 +396,10 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
     def create_state_machine_from_definition(
         self,
-        sfn_client: boto3.client,
+        snapshot: PipelineSnapshotResponse,
+        stepfunction_client: boto3.client,
         name: str,
         definition: Dict[str, Any],
-        role_arn: str,
     ) -> str:
         """Create an AWS Step Functions state machine.
 
@@ -257,12 +412,12 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         Returns:
             The ARN of the created state machine
         """
-        response = sfn_client.create_state_machine(
+        response = stepfunction_client.create_state_machine(
             name=name,
             definition=json.dumps(definition),
-            roleArn=role_arn,
+            roleArn=self.config.aws_stepfunctions_execution_role,
             type="STANDARD",
-            tags=[],
+            tags=snapshot.pipeline_configuration.settings["orchestrator"].tags,
         )
         state_machine_arn = response["stateMachineArn"]
         print(f"State Machine ARN: {state_machine_arn}")
@@ -284,6 +439,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         Returns:
             The ARN of the execution
         """
+
         execution_name = f"zenml-{pipeline_name}-{int(time.time())}"
         response = sfn_client.start_execution(
             stateMachineArn=state_machine_arn,
