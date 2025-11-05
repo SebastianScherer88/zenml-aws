@@ -59,7 +59,8 @@ class AWSBatchStepOperatorSettings(BaseSettings):
     )
     timeout_seconds: PositiveInt = Field(
         default=3600,
-        description="The number of seconds before AWS Batch times out the job.",
+        description="The number of seconds before AWS Batch times out the "
+        "step's job.",
     )
 
 
@@ -76,9 +77,6 @@ class AWSBatchStepOperatorConfig(BaseStepOperatorConfig, AWSBatchStepOperatorSet
         description="The IAM role arn of the ECS execution role."
     )
     job_role: str = Field(description="The IAM role arn of the ECS job role.")
-    default_job_queue_name: str = Field(
-        description="The default AWS Batch job queue to submit AWS Batch jobs to."
-    )
     aws_access_key_id: Optional[str] = SecretField(
         default=None,
         description="The AWS access key ID to use to authenticate to AWS. "

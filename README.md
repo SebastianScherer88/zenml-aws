@@ -97,7 +97,7 @@ zenml step-operator flavor register src.zenml_aws.step_operator.aws_batch_step_o
 Register the step operator component:
 
 ```bash
-zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --default_job_queue_name=zenml-test-ec2-job-queue
+zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags='{"test":"step-operator"}' --assign_public_ip=false --timeout_seconds=900 --aws_profile=pulumi
 ```
 
 Register the AWS Batch orchestrator flavour:
@@ -109,7 +109,7 @@ zenml orchestrator flavor register zenml_aws.orchestrator.aws_stepfunctions_batc
 Register the orchestrator component:
 
 ```bash
-zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --name=stepfunctions-comp
+zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=fake-role-arn --batch_execution_role=arn:aws:iam::743582000746:role/batch-execution-role --batch_job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags='{"test":"orchestrator"}' --assign_public_ip=false --timeout_seconds=900 --aws_profile=pulumi
 ```
 
 Register a remote type ECR contaier registry component:
@@ -141,15 +141,17 @@ A useful command to update the aws-test zenml stack is:
 ```bash
 zenml stack set default
 zenml stack delete aws-test -y
+# step operator
 zenml step-operator delete aws-batch
 zenml step-operator flavor delete aws_batch
 zenml step-operator flavor register zenml_aws.step_operator.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
-zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --default_job_queue_name=zenml-test-job-queue
+zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags='{"test":"step-operator"}' --assign_public_ip=false --timeout_seconds=900 --aws_profile=pulumi
+# orchestrator
 zenml orchestrator delete aws-stepfunctions
 zenml orchestrator flavor delete aws_stepfunctions
 zenml orchestrator flavor register zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
-zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --name=stepfunctions-comp
-zenml stack register aws-test -a default -o default -c aws-ecr -s aws-batch -a aws-s3
+zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=fake-role-arn --batch_execution_role=arn:aws:iam::743582000746:role/batch-execution-role --batch_job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags='{"test":"orchestrator"}' --assign_public_ip=false --timeout_seconds=900 --aws_profile=pulumi
+zenml stack register aws-test -a default -o aws-stepfunctions -c aws-ecr -s aws-batch -a aws-s3
 zenml stack set aws-test
 ```
 
@@ -175,10 +177,19 @@ pytest tests/unit -vv # unit tests
 pytest tests/integration -vv # integration tests
 ```
 
+## Step operator
+
 For end-to-end tests running on the provisioned AWS infrastructure, run the 
 test scripts in the `scripts` directory:
 
 ```bash
 python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-test-ec2-job-queue --memory 1000
 python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2048
+```
+
+## Orchestrator
+
+```bash
+python scripts/test_run_orchestrator.py --backend EC2 --job-queue zenml-test-ec2-job-queue --memory 1000
+python scripts/test_run_orchestrator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2048
 ```

@@ -1,10 +1,12 @@
 """AWS Step Functions orchestrator flavor."""
 
-from typing import Optional, Type
+from typing import Literal, Optional, Type
 
-from pydantic import Field
+from pydantic import Field, PositiveInt
 from zenml.config.base_settings import BaseSettings
-from zenml.integrations.aws import AWS_RESOURCE_TYPE
+from zenml.integrations.aws import (
+    AWS_RESOURCE_TYPE,
+)
 from zenml.models import ServiceConnectorRequirements
 from zenml.orchestrators import BaseOrchestratorConfig
 from zenml.orchestrators.base_orchestrator import BaseOrchestratorFlavor
@@ -16,11 +18,33 @@ from zenml_aws.constants import AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR
 class AWSStepFunctionsOrchestratorSettings(BaseSettings):
     """Settings for the AWS Step Functions Orchestrator."""
 
+    job_queue_name: str = Field(
+        default="",
+        description="The default AWS Batch job queue to submit each step's AWS"
+        " Batch job to. Can be overriden at the step level. Must be compatible"
+        " with `default_backend`.",
+    )
+    backend: Literal["EC2", "FARGATE"] = Field(
+        default="FARGATE",
+        description="The default AWS Batch platform capability for each step's"
+        " AWS Batch job. Must be compatible with `job_queue_name`. Defaults to"
+        " 'FARGATE'.",
+    )
     tags: dict[str, str] = Field(
         default=dict(),
-        description="The tags for this step's AWS BatchJobDefinition resource."
-        "For zenml meta tags added automatically, see the "
-        "zenml.constants.AWSBatchTags class.",
+        description="The tags for all steps' AWS BatchJobDefinition and"
+        "Stepfunctions resources. For zenml meta tags added automatically, see"
+        " the zenml.constants.AWSBatchTags class.",
+    )
+
+    assign_public_ip: Literal["ENABLED", "DISABLED"] = Field(
+        default="ENABLED",
+        description="Sets the network configuration's assignPublicIp field."
+        "Only relevant for FARGATE backend steps.",
+    )
+    timeout_seconds: PositiveInt = Field(
+        default=3600,
+        description="The number of seconds before AWS Batch times out a step's" " job.",
     )
 
 
@@ -33,26 +57,15 @@ class AWSStepFunctionsOrchestratorConfig(
         name: Name of the orchestrator
     """
 
-    aws_stepfunctions_execution_role: str = Field(
+    stepfunctions_execution_role: str = Field(
         description="The IAM role arn of the Stepfunctions execution role."
     )
 
-    aws_batch_execution_role: str = Field(
+    batch_execution_role: str = Field(
         description="The IAM role arn of the ECS execution role."
     )
-    aws_batch_job_role: str = Field(description="The IAM role arn of the ECS job role.")
+    batch_job_role: str = Field(description="The IAM role arn of the ECS job role.")
 
-    default_job_queue_name: str = Field(
-        description="The default AWs Batch job queue. Non GPU workloads will "
-        "be scheduled here. Recommended AWS Batch backend is FARGATE due to "
-        "faster provisioning."
-    )
-    accelerated_job_queue_name: str = Field(
-        description="{Optional) The accelerator hardware AWS Batch job queue. "
-        "GPU / Inferentia workloads will be scheduled here. Must be AWS "
-        "Batch's EC2 backend, sourced by the desired accelerator hardware "
-        "compatible compute environment."
-    )
     aws_access_key_id: Optional[str] = SecretField(
         default=None,
         description="The AWS access key ID to use to authenticate to AWS. "

@@ -27,6 +27,7 @@ from zenml.step_operators import BaseStepOperator
 
 from zenml_aws.constants import (
     AWS_BATCH_JOB_DEFAULT_NAME,
+    AWS_BATCH_STEP_OPERATOR_FLAVOR,
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchTag,
 )
@@ -241,30 +242,49 @@ class AWSBatchJobDefinition(BaseModel):
         accessible inside the AWSStepFunctionsOrchestrator's `submit_pipeline`
         method.."""
 
-        pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
         step_resource_settings: ResourceSettings = step.config.resource_settings
+
+        import pdb
+
+        pdb.set_trace()
 
         # assemble container command
         command = StepEntrypointConfiguration.get_entrypoint_command()
         arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
             step_name=step.config.name,
-            deployment_id=snapshot.id,
+            snapshot_id=snapshot.id,
         )
         command_and_arguments = command + arguments
 
-        # step settings (AWSBatchStepOperatorSettings)
-        step_settings: AWSBatchStepOperatorSettings = orchestrator.get_settings(step)
         import pdb
 
         pdb.set_trace()
 
+        # use step settings if AWSBatchStepOperator is configured for the step,
+        # otherwise fall back to orchestrator defaults
+        step_settings: AWSBatchStepOperatorSettings = step.config.settings.get(
+            f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
+        )
+        step_aws_batch_tags = {}
+        if step_settings is not None:
+            step_aws_batch_backend = step_settings.backend
+            step_aws_batch_timeout_seconds = step_settings.timeout_seconds
+            step_aws_batch_tags.update(**step_settings.tags)
+        else:
+            pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
+            step_aws_batch_backend = pipeline_config.default_backend
+            step_aws_batch_timeout_seconds = pipeline_config.default_timeout_seconds
+            step_aws_batch_tags.update(**pipeline_config.tags)
+
+        orchestrator.settings_class
+
         container_kwargs = {}
 
-        if step_settings.backend == "EC2":
+        if step_aws_batch_backend == "EC2":
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
             AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
 
-        elif step_settings.backend == "FARGATE":
+        elif step_aws_batch_backend == "FARGATE":
             AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
@@ -274,9 +294,9 @@ class AWSBatchJobDefinition(BaseModel):
             }
 
         return AWSBatchJobDefinitionClass(
-            timeout={"attemptDurationSeconds": step_settings.timeout_seconds},
+            timeout={"attemptDurationSeconds": step_aws_batch_timeout_seconds},
             type="container",
-            tags=step_settings.tags,
+            tags=step_aws_batch_tags,
             containerProperties=AWSBatchContainerProperties(
                 executionRoleArn=pipeline_config.aws_batch_execution_role,
                 jobRoleArn=pipeline_config.aws_batch_job_role,
