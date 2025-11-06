@@ -194,31 +194,36 @@ test_fargate_job_queue = aws.batch.JobQueue(
     ],
 )
 
-# # --- batch: submission role
-# test_submission_role = aws.iam.Role(
-#     "batch-submission-role",
-#     name="batch-submission-role",
-#     assume_role_policy=json.dumps(
-#         {
-#             "Version": "2012-10-17",
-#             "Statement": [
-#                 {
-#                     "Effect": "Allow",
-#                     "Principal": {"AWS": "arn:aws:iam::743582000746:root"},
-#                     "Action": "sts:AssumeRole",
-#                 }
-#             ],
-#         }
-#     ),
-# )
-
-# test_submission_policy_attachment = aws.iam.PolicyAttachment(
-#     resource_name="AWSBatchTestAdminPolicyAttachment",
-#     name="AWSBatchTestAdminPolicyAttachment",
-#     roles=[test_submission_role.name],
-#     policy_arn="arn:aws:iam::aws:policy/AdministratorAccess",
-# )
 # --- stepfunctions: execution role
+test_stepfunctions_execution_role = aws.iam.Role(
+    "stepfunctions-execution-role",
+    name="stepfunctions-execution-role",
+    assume_role_policy=json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "AWS": "arn:aws:iam::743582000746:root",
+                        "Service": [
+                            "states.amazonaws.com",
+                            "states.eu-west-1.amazonaws.com",
+                        ],
+                    },
+                    "Action": "sts:AssumeRole",
+                }
+            ],
+        }
+    ),
+)
+
+test_stepfunctions_execution_policy_attachment = aws.iam.PolicyAttachment(
+    resource_name="AWSStepfunctionsExecutionRolePolicyAttachment",
+    name="AWSStepfunctionsExecutionRolePolicyAttachment",
+    roles=[test_stepfunctions_execution_role.name],
+    policy_arn="arn:aws:iam::aws:policy/AdministratorAccess",
+)
 
 # --- ecs: job role
 test_batch_job_role = aws.iam.Role(
@@ -274,7 +279,10 @@ pulumi.export("zenml-container-registry-arn", test_ecr_repo.arn)
 pulumi.export("zenml-container-registry-url", test_ecr_repo.repository_url)
 pulumi.export("zenml-artifact-store-arn", test_s3_bucket.arn)
 pulumi.export("zenml-artifact-store-bucket-name", test_s3_bucket.bucket)
-pulumi.export("test-job-ec2-queue-name", test_ec2_job_queue.name)
-pulumi.export("test-job-fargate-queue-name", test_fargate_job_queue.name)
-pulumi.export("test-job-role-arn", test_batch_job_role.arn)
-pulumi.export("test-execution-role-arn", test_batch_execution_role.arn)
+pulumi.export("test-batch-job-ec2-queue-name", test_ec2_job_queue.name)
+pulumi.export("test-batch-job-fargate-queue-name", test_fargate_job_queue.name)
+pulumi.export("test-batch-job-role-arn", test_batch_job_role.arn)
+pulumi.export("test-batch-execution-role-arn", test_batch_execution_role.arn)
+pulumi.export(
+    "test-stepfunctions-execution-role-arn", test_stepfunctions_execution_role.arn
+)

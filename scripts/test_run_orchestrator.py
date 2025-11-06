@@ -15,13 +15,13 @@ docker_settings = DockerSettings(
 )
 
 
-@step(name="greet", step_operator=True, environment={"test-a": "A"})
+@step(name="greet", environment={"test-a": "A"})
 def test_greet(name: str) -> str:
     """A simple step that returns a greeting message."""
     return f"Hello {name}!"
 
 
-@step(name="report", step_operator=True, environment={"test-b": "B"})
+@step(name="report", environment={"test-b": "B"})
 def test_report(message: str) -> str:
     """A simple step that reports on a greeting."""
     return f"The message was '{message}'!"

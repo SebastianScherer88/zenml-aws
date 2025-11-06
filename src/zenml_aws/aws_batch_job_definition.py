@@ -244,10 +244,6 @@ class AWSBatchJobDefinition(BaseModel):
 
         step_resource_settings: ResourceSettings = step.config.resource_settings
 
-        import pdb
-
-        pdb.set_trace()
-
         # assemble container command
         command = StepEntrypointConfiguration.get_entrypoint_command()
         arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
@@ -256,50 +252,48 @@ class AWSBatchJobDefinition(BaseModel):
         )
         command_and_arguments = command + arguments
 
-        import pdb
-
-        pdb.set_trace()
-
         # use step settings if AWSBatchStepOperator is configured for the step,
         # otherwise fall back to orchestrator defaults
-        step_settings: AWSBatchStepOperatorSettings = step.config.settings.get(
+        step_settings: AWSBatchStepOperatorSettings | None = step.config.settings.get(
             f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
         )
-        step_aws_batch_tags = {}
-        if step_settings is not None:
-            step_aws_batch_backend = step_settings.backend
-            step_aws_batch_timeout_seconds = step_settings.timeout_seconds
-            step_aws_batch_tags.update(**step_settings.tags)
-        else:
+        step_tags = {}
+        try:
+            step_backend = step_settings.backend
+            step_timeout_seconds = step_settings.timeout_seconds
+            step_tags.update(**step_settings.tags)
+            step_assign_public_ip = step_settings.assign_public_ip
+        except AttributeError:
             pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
-            step_aws_batch_backend = pipeline_config.default_backend
-            step_aws_batch_timeout_seconds = pipeline_config.default_timeout_seconds
-            step_aws_batch_tags.update(**pipeline_config.tags)
+            step_backend = pipeline_config.backend
+            step_timeout_seconds = pipeline_config.timeout_seconds
+            step_tags.update(**pipeline_config.tags)
+            step_assign_public_ip = pipeline_config.assign_public_ip
 
         orchestrator.settings_class
 
         container_kwargs = {}
 
-        if step_aws_batch_backend == "EC2":
+        if step_backend == "EC2":
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
             AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
 
-        elif step_aws_batch_backend == "FARGATE":
+        elif step_backend == "FARGATE":
             AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
             )
             container_kwargs["networkConfiguration"] = {
-                "assignPublicIp": step_settings.assign_public_ip
+                "assignPublicIp": step_assign_public_ip
             }
 
         return AWSBatchJobDefinitionClass(
-            timeout={"attemptDurationSeconds": step_aws_batch_timeout_seconds},
+            timeout={"attemptDurationSeconds": step_timeout_seconds},
             type="container",
-            tags=step_aws_batch_tags,
+            tags=step_tags,
             containerProperties=AWSBatchContainerProperties(
-                executionRoleArn=pipeline_config.aws_batch_execution_role,
-                jobRoleArn=pipeline_config.aws_batch_job_role,
+                executionRoleArn=pipeline_config.batch_execution_role,
+                jobRoleArn=pipeline_config.batch_job_role,
                 image=get_image_fn(snapshot, step.config.name),
                 command=command_and_arguments,
                 environment=map_environment(environment),

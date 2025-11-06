@@ -9,6 +9,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Literal,
     Optional,
     Tuple,
     Type,
@@ -17,7 +18,6 @@ from typing import (
 
 import boto3
 from boto3 import Session
-from rich import print
 from zenml.config.base_settings import BaseSettings
 from zenml.constants import (
     METADATA_ORCHESTRATOR_LOGS_URL,
@@ -36,6 +36,7 @@ from zenml_aws.aws_batch_job_definition import (
     check_existing_batch_job_definition,
     register_new_batch_job_definition,
 )
+from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR
 
 # Custom imports
 from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
@@ -175,79 +176,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 )
         return boto_session
 
-    # @staticmethod
-    # def check_existing_job_definition(batch_client, job_definition_name: str) -> dict:
-    #     """Checks AWS for an active AWS Batch job definition under the give name.
-
-    #     Args:
-    #         batch_client (_type_): The AWS Batch client instance
-    #         job_definition_name (str): The name of the AWS Batch job definition
-
-    #     Returns:
-    #         dict: The latest AWS Batch job definition found, or an empty dict
-    #             otherwise.
-    #     """
-
-    #     response = batch_client.describe_job_definitions(
-    #         jobDefinitionName=job_definition_name, status="ACTIVE"
-    #     )
-
-    #     batch_job_definitions = response.get(
-    #         "jobDefinitions",
-    #         [
-    #             {},
-    #         ],
-    #     )
-
-    #     try:
-    #         existing_job_definition = sorted(
-    #             batch_job_definitions, key=lambda revision: revision["revision"]
-    #         )[0]
-    #         batch_job_definition_arn = existing_job_definition.get(
-    #             "jobDefinitionArn", ""
-    #         )
-    #         batch_job_definition_revision = existing_job_definition.get("revision", "")
-    #         logger.info(
-    #             "Found Existing AWS Batch job definition "
-    #             f"{job_definition_name}. ARN: {batch_job_definition_arn}. "
-    #             f"Revision: {batch_job_definition_revision}"
-    #         )
-    #     except IndexError:
-    #         return {}
-
-    # @staticmethod
-    # def register_new_job_definition(
-    #     batch_client,
-    #     job_definition: AWSBatchJobDefinition,
-    #     job_definition_name: str,
-    # ):
-    #     """Registers a new AWS Batch job definition.
-
-    #     Args:
-    #         batch_client (_type_): The AWS Batch client instance
-    #         job_definition (AWSBatchJobDefinition): The name of the AWS Batch job definition
-    #         info (StepRunInfo): The step operator's info.
-    #     """
-
-    #     batch_job_definition_dict = job_definition.model_dump()
-    #     batch_job_definition_dict["jobDefinitionName"] = job_definition_name
-    #     response = batch_client.register_job_definition(**batch_job_definition_dict)
-
-    #     batch_job_definition_registered_successfully = (
-    #         response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 200
-    #     ) and "jobDefinitionArn" in response
-
-    #     if batch_job_definition_registered_successfully:
-    #         batch_job_definition_arn = response.get("jobDefinitionArn", "")
-    #         batch_job_definition_revision = response.get("revision", "")
-    #         logger.info(
-    #             "Registered AWS Batch job definition "
-    #             f"{job_definition_name}. ARN: {batch_job_definition_arn}. "
-    #             f"Revision: {batch_job_definition_revision}."
-    #         )
-    #     else:
-    #         logger.error(f"Could not register new AWS Batch job definition: {response}")
-
     def submit_pipeline(
         self,
         snapshot: PipelineSnapshotResponse,
@@ -287,9 +215,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         boto_session = self._get_aws_session()
         batch_client = boto_session.client("batch")
 
-        # STEP_FUNCTIONS_ROLE_ARN = (
-        #     "arn:aws:iam::847068433460:role/zenml-hackathon-step-functions-role"
-        # )
         step_name_to_unique_job_definition_name: dict[str, str] = {}
 
         for step_name, step in snapshot.step_configurations.items():
@@ -333,15 +258,12 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             snapshot, step_name_to_unique_job_definition_name
         )
 
-        print(state_machine_definition)
-
         # Create and execute state machine using helper functions
         stepfunction_client = boto_session.client("stepfunctions")
         state_machine_arn = self.create_state_machine_from_definition(
             stepfunction_client=stepfunction_client,
             name=name,
             definition=state_machine_definition,
-            # role_arn=STEP_FUNCTIONS_ROLE_ARN,
         )
 
         execution_arn = self.start_state_machine_execution(
@@ -395,6 +317,21 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         return levels
 
+    @staticmethod
+    def map_tags(tags: dict[str, str]) -> list[dict[Literal["key"] | Literal["value"]]]:
+        """Utility to map the {key:value} tags to the
+        [{"key":key,"value":value},] convention used in the AWS Stepfunctions
+        definition spec.
+
+        Args:
+            tags: The stepfunction definition's tags
+
+        Returns:
+            The mapped tag variable specification
+        """
+
+        return [{"key": k, "value": v} for k, v in tags.items()]
+
     def create_state_machine_from_definition(
         self,
         stepfunction_client: boto3.client,
@@ -415,18 +352,19 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         response = stepfunction_client.create_state_machine(
             name=name,
             definition=json.dumps(definition),
-            roleArn=self.config.aws_stepfunctions_execution_role,
+            roleArn=self.config.stepfunctions_execution_role,
             type="STANDARD",
-            tags=self.config.tags,
+            tags=self.map_tags(self.config.tags),
         )
         try:
             state_machine_arn = response["stateMachineArn"]
             logger.info(
-                f"Created AWS Stepfunctions state machine. ARN: {state_machine_arn} @{datetime.now()}"
+                f"Created AWS Stepfunctions state machine. ARN: "
+                f"{state_machine_arn} @{datetime.now()}"
             )
         except KeyError as e:
             logger.info(
-                f"Failed to create AWS Stepfunctions state machine @{datetime.now()}"
+                "Failed to create AWS Stepfunctions state machine @" f"{datetime.now()}"
             )
             raise e
         return state_machine_arn
@@ -453,7 +391,20 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             stateMachineArn=state_machine_arn,
             name=execution_name,
         )
-        return response["executionArn"]
+        try:
+            execution_arn = response["executionArn"]
+            logger.info(
+                f"Started execution of AWS Stepfunctions state machine "
+                f"{state_machine_arn}. Execution ARN: {execution_arn} @"
+                f"{datetime.now()}"
+            )
+            return execution_arn
+        except KeyError as e:
+            logger.info(
+                f"Failed to execute AWS Stepfunctions state machine "
+                f"{state_machine_arn} @{datetime.now()}"
+            )
+            raise e
 
     def create_state_machine_definition(
         self,
@@ -467,17 +418,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         - Supports **parallel execution** of pipeline steps.
         """
 
-        # # 🔹 Static AWS Batch settings
-        # JOB_DEFINITION_NAME = "zenml-fargate-job-def-from-python"
-        # JOB_QUEUE_NAME = "zenml-fargate-queue-manual"
-
-        # pipeline_settings = cast(
-        #     AWSStepFunctionsOrchestratorSettings, self.get_settings(snapshot)
-        # )
-        # pipeline_configuration: AWSStepFunctionsOrchestratorConfig = (
-        #     snapshot.pipeline_configuration
-        # )
-
         # 🔹 Build DAG levels for parallel execution
         dag_levels = self.build_dag_levels(snapshot)
 
@@ -486,35 +426,78 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         # Add each level with parallel branches
         for level_num, level in enumerate(dag_levels):
-            states[f"Level_{level_num}"] = {
+            state_name = f"Level_{level_num}"
+            states[state_name] = {
                 "Type": "Parallel",
-                "Branches": [
+                "Branches": [],
+                "Next": f"Level_{level_num + 1}"
+                if level_num < len(dag_levels) - 1
+                else "Success",
+            }
+
+            for step_name in level:
+                # use step settings if AWSBatchStepOperator is configured for
+                # the step, otherwise fall back to orchestrator defaults
+                step_settings: AWSBatchStepOperatorSettings | None = (
+                    snapshot.step_configurations[
+                        step_name
+                    ].config.settings.get(
+                        f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
+                    )
+                )
+                try:
+                    step_job_queue = step_settings.job_queue_name
+                except AttributeError:
+                    step_job_queue = self.config.job_queue_name
+
+                states[state_name]["Branches"].append(
                     {
-                        "StartAt": step,
+                        "StartAt": step_name,
                         "States": {
-                            step: {
+                            step_name: {
                                 "Type": "Task",
                                 "Resource": "arn:aws:states:::batch:submitJob.sync",
                                 "Parameters": {
                                     "JobDefinition": step_name_to_unique_job_definition_name[
-                                        step
+                                        step_name
                                     ],
-                                    "JobQueue": cast(
-                                        AWSBatchStepOperatorSettings,
-                                        self.get_settings(step),
-                                    ).job_queue_name,
-                                    "JobName": step,
+                                    "JobQueue": step_job_queue,
+                                    "JobName": step_name,
                                 },
                                 "End": True,
                             }
                         },
                     }
-                    for step in level
-                ],
-                "Next": f"Level_{level_num + 1}"
-                if level_num < len(dag_levels) - 1
-                else "Success",
-            }
+                )
+            # states[f"Level_{level_num}"] = {
+            #     "Type": "Parallel",
+            #     "Branches": [
+            #         {
+            #             "StartAt": step,
+            #             "States": {
+            #                 step: {
+            #                     "Type": "Task",
+            #                     "Resource": "arn:aws:states:::batch:submitJob.sync",
+            #                     "Parameters": {
+            #                         "JobDefinition": step_name_to_unique_job_definition_name[
+            #                             step
+            #                         ],
+            #                         "JobQueue": cast(
+            #                             AWSBatchStepOperatorSettings,
+            #                             self.get_settings(step),
+            #                         ).job_queue_name,
+            #                         "JobName": step,
+            #                     },
+            #                     "End": True,
+            #                 }
+            #             },
+            #         }
+            #         for step in level
+            #     ],
+            #     "Next": f"Level_{level_num + 1}"
+            #     if level_num < len(dag_levels) - 1
+            #     else "Success",
+            # }
 
         # 🔹 Add Success state
         states.update({"Success": {"Type": "Succeed"}})
