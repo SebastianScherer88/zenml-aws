@@ -1,5 +1,6 @@
 """Improved AWS Step Functions Orchestrator with Parallel Execution and Safety Checks"""
 
+import hashlib
 import json
 import os
 import time
@@ -35,6 +36,7 @@ from zenml_aws.aws_batch_job_definition import (
     AWSBatchJobDefinition,
     check_existing_batch_job_definition,
     register_new_batch_job_definition,
+    sanitize_name,
 )
 from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR
 
@@ -218,7 +220,11 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         step_name_to_unique_job_definition_name: dict[str, str] = {}
 
         for step_name, step in snapshot.step_configurations.items():
-            step_environment = {**base_environment, **step_environments[step_name]}
+            step_environment = {
+                **snapshot.pipeline_configuration.environment,
+                **step_environments[step_name],
+                ENV_ZENML_STEP_FUNCTIONS_RUN_ID: str(snapshot.id),
+            }
 
             step_aws_batch_job_definition = AWSBatchJobDefinition.from_orchestrator(
                 orchestrator=self,
@@ -253,21 +259,27 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 )
 
         # assemble and run as stepfunctions state machine
-        name = "ZenML_Batch_Job_StateMachine_DAG_Script"
         state_machine_definition = self.create_state_machine_definition(
             snapshot, step_name_to_unique_job_definition_name
         )
+
+        state_machine_definition_json = json.dumps(
+            state_machine_definition, sort_keys=True
+        ).encode()
+        state_machine_definition_hash = hashlib.sha256(
+            state_machine_definition_json
+        ).hexdigest()
 
         # Create and execute state machine using helper functions
         stepfunction_client = boto_session.client("stepfunctions")
         state_machine_arn = self.create_state_machine_from_definition(
             stepfunction_client=stepfunction_client,
-            name=name,
+            name=f"{sanitize_name(snapshot.pipeline.name,30)}-{state_machine_definition_hash}",
             definition=state_machine_definition,
         )
 
         execution_arn = self.start_state_machine_execution(
-            sfn_client=stepfunction_client,
+            stepfunction_client=stepfunction_client,
             state_machine_arn=state_machine_arn,
             pipeline_name=snapshot.pipeline_configuration.name,
         )

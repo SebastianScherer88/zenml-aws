@@ -144,7 +144,7 @@ zenml stack delete test-step-operator -y
 zenml step-operator delete aws-batch
 zenml step-operator flavor delete aws_batch
 zenml step-operator flavor register zenml_aws.step_operator.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
-zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=pulumi
+zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=ENABLED --timeout_seconds=900 --aws_profile=pulumi
 zenml stack register test-step-operator -a default -o default -c aws-ecr -s aws-batch -a aws-s3
 zenml stack set test-step-operator
 ```
@@ -157,7 +157,7 @@ zenml stack delete test-orchestrator -y
 zenml orchestrator delete aws-stepfunctions
 zenml orchestrator flavor delete aws_stepfunctions
 zenml orchestrator flavor register zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
-zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=arn:aws:iam::743582000746:role/stepfunctions-execution-role --batch_execution_role=arn:aws:iam::743582000746:role/batch-execution-role --batch_job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=pulumi
+zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=arn:aws:iam::743582000746:role/stepfunctions-execution-role --batch_execution_role=arn:aws:iam::743582000746:role/batch-execution-role --batch_job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=ENABLED --timeout_seconds=900 --aws_profile=pulumi
 zenml stack register test-orchestrator -a default -o aws-stepfunctions -c aws-ecr -a aws-s3
 zenml stack set test-orchestrator
 ```
