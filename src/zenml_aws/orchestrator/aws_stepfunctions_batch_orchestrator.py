@@ -38,7 +38,10 @@ from zenml_aws.aws_batch_job_definition import (
     register_new_batch_job_definition,
     sanitize_name,
 )
-from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR
+from zenml_aws.constants import (
+    AWS_BATCH_STEP_OPERATOR_FLAVOR,
+    AWSStateMachineExecutionStatus,
+)
 
 # Custom imports
 from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
@@ -284,17 +287,48 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             pipeline_name=snapshot.pipeline_configuration.name,
         )
 
+        if self.config.wait_for_completion:
+
+            def wait_for_completion():
+                while True:
+                    now = datetime.now()
+                    response = stepfunction_client.describe_execution(
+                        executionArn=execution_arn
+                    )
+                    status: AWSStateMachineExecutionStatus = response["status"]
+
+                    if status == AWSStateMachineExecutionStatus.running:
+                        logger.info(
+                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} is running @{now}."
+                        )
+                    elif status == AWSStateMachineExecutionStatus.succeeded:
+                        logger.info(
+                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} completed successfully @{now}."
+                        )
+                        break
+                    elif status in (
+                        AWSStateMachineExecutionStatus.failed,
+                        AWSStateMachineExecutionStatus.aborted,
+                        AWSStateMachineExecutionStatus.timed_out,
+                    ):
+                        raise RuntimeError(
+                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} failed with status {status} @{now}"
+                        )
+
+                    time.sleep(self.config.poll_interval_seconds)
+        else:
+            wait_for_completion = None
+
         # Generate metadata using the standalone function
+        try:
+            stepfunction_client.delete_state_machine(stateMachineArn=state_machine_arn)
+        except Exception as e:
+            logger.warning(f"Failed to delete state machine: {e}")
 
-        SubmissionResult(metadata=generate_step_functions_metadata(execution_arn))
-
-        # finally:
-        #     # Clean up state machine after execution starts
-        #     try:
-        #         # sfn.delete_state_machine(stateMachineArn=state_machine_arn)
-        #         ...
-        #     except Exception as e:
-        #         logger.warning(f"Failed to delete state machine: {e}")
+        return SubmissionResult(
+            wait_for_completion=wait_for_completion,
+            metadata=generate_step_functions_metadata(execution_arn),
+        )
 
     @staticmethod
     def build_dag_levels(
@@ -481,35 +515,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                         },
                     }
                 )
-            # states[f"Level_{level_num}"] = {
-            #     "Type": "Parallel",
-            #     "Branches": [
-            #         {
-            #             "StartAt": step,
-            #             "States": {
-            #                 step: {
-            #                     "Type": "Task",
-            #                     "Resource": "arn:aws:states:::batch:submitJob.sync",
-            #                     "Parameters": {
-            #                         "JobDefinition": step_name_to_unique_job_definition_name[
-            #                             step
-            #                         ],
-            #                         "JobQueue": cast(
-            #                             AWSBatchStepOperatorSettings,
-            #                             self.get_settings(step),
-            #                         ).job_queue_name,
-            #                         "JobName": step,
-            #                     },
-            #                     "End": True,
-            #                 }
-            #             },
-            #         }
-            #         for step in level
-            #     ],
-            #     "Next": f"Level_{level_num + 1}"
-            #     if level_num < len(dag_levels) - 1
-            #     else "Success",
-            # }
 
         # 🔹 Add Success state
         states.update({"Success": {"Type": "Succeed"}})
@@ -519,6 +524,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             "Comment": f"ZenML Pipeline: {snapshot.pipeline_configuration.name}",
             "StartAt": "Start",
             "States": states,
+            "TimeoutSeconds": self.config.timeout_seconds,
         }
 
         return definition

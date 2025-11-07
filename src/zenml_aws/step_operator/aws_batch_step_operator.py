@@ -191,76 +191,6 @@ class AWSBatchStepOperator(BaseStepOperator):
 
         return builds
 
-    # @staticmethod
-    # def check_existing_job_definition(batch_client, job_definition_name: str) -> dict:
-    #     """Checks AWS for an active AWS Batch job definition under the give name.
-
-    #     Args:
-    #         batch_client (_type_): The AWS Batch client instance
-    #         job_definition_name (str): The name of the AWS Batch job definition
-
-    #     Returns:
-    #         dict: The latest AWS Batch job definition found, or an empty dict
-    #             otherwise.
-    #     """
-
-    #     response = batch_client.describe_job_definitions(
-    #         jobDefinitionName=job_definition_name, status="ACTIVE"
-    #     )
-
-    #     batch_job_definitions = response.get(
-    #         "jobDefinitions",
-    #         [
-    #             {},
-    #         ],
-    #     )
-
-    #     try:
-    #         existing_job_definition = sorted(
-    #             batch_job_definitions, key=lambda revision: revision["revision"]
-    #         )[0]
-    #         batch_job_definition_arn = existing_job_definition.get(
-    #             "jobDefinitionArn", ""
-    #         )
-    #         batch_job_definition_revision = existing_job_definition.get("revision", "")
-    #         logger.info(
-    #             f"Found Existing AWS Batch job definition {job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
-    #         )
-    #     except IndexError:
-    #         return {}
-
-    # @staticmethod
-    # def register_new_job_definition(
-    #     batch_client, job_definition: AWSBatchJobDefinition, job_definition_name: str
-    # ):
-    #     """Registers a new AWS Batch job definition.
-
-    #     Args:
-    #         batch_client (_type_): The AWS Batch client instance
-    #         job_definition (AWSBatchJobDefinition): The name of the AWS Batch job definition
-    #         info (StepRunInfo): The step operator's info.
-    #     """
-
-    #     batch_job_definition_dict = job_definition.model_dump()
-
-    #     batch_job_definition_dict["jobDefinitionName"] = job_definition_name
-    #     response = batch_client.register_job_definition(**batch_job_definition_dict)
-
-    #     batch_job_definition_registered_successfully = (
-    #         response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 200
-    #     ) and "jobDefinitionArn" in response
-
-    #     if batch_job_definition_registered_successfully:
-    #         batch_job_definition_arn = response.get("jobDefinitionArn", "")
-    #         batch_job_definition_revision = response.get("revision", "")
-    #         logger.info(
-    #             f"Registered AWS Batch job definition {job_definition_name}. "
-    #             f"ARN: {batch_job_definition_arn}. Revision: "
-    #             f"{batch_job_definition_revision}."
-    #         )
-    #     else:
-    #         logger.error(f"Could not register new AWS Batch job definition: {response}")
-
     def submit_job(
         self,
         batch_client,
@@ -289,7 +219,7 @@ class AWSBatchStepOperator(BaseStepOperator):
             jobName=job_definition_name,
             jobQueue=step_settings.job_queue_name
             if step_settings.job_queue_name
-            else self.config.default_job_queue_name,
+            else self.config.job_queue_name,
             jobDefinition=job_definition_name,
         )
 
@@ -299,20 +229,18 @@ class AWSBatchStepOperator(BaseStepOperator):
             try:
                 now = datetime.now()
                 response = batch_client.describe_jobs(jobs=[job_id])
-                status = response["jobs"][0]["status"]
+                status: AWSBatchJobStatus = response["jobs"][0]["status"]
                 status_reason = response["jobs"][0].get("statusReason", "Unknown")
 
-                if status == str(AWSBatchJobStatus.submitted):
+                if status == AWSBatchJobStatus.submitted:
                     logger.info(f"Job {job_id} submitted successfully @{now}.")
-                elif status == str(AWSBatchJobStatus.runnable):
+                elif status in (AWSBatchJobStatus.runnable, AWSBatchJobStatus.pending):
                     logger.info(
-                        f"Job {job_id} is runnable and waiting for execution @{now}."
+                        f"Job {job_id} is {status.lower()} and waiting for execution @{now}."
                     )
-                elif status == str(AWSBatchJobStatus.starting):
-                    logger.info(f"Job {job_id} is starting @{now}.")
-                elif status == str(AWSBatchJobStatus.running):
-                    logger.info(f"Job {job_id} is running @{now}.")
-                elif status == str(AWSBatchJobStatus.succeeded):
+                elif status in (AWSBatchJobStatus.starting, AWSBatchJobStatus.running):
+                    logger.info(f"Job {job_id} is {status.lower()} @{now}.")
+                elif status == AWSBatchJobStatus.succeeded:
                     logger.info(f"Job {job_id} completed successfully @{now}.")
                     break
                 elif status == AWSBatchJobStatus.failed:
@@ -320,12 +248,7 @@ class AWSBatchStepOperator(BaseStepOperator):
                         f"Job {job_id} failed with status reason "
                         f"{status_reason} @{now}"
                     )
-                else:
-                    logger.info(
-                        f"Job {job_id} has unknown status: {status}. Reason: "
-                        f"{status_reason} @{now}."
-                    )
-                time.sleep(10)
+                time.sleep(self.config.poll_interval_seconds)
             except ClientError as e:
                 now = datetime.now()
                 logger.error(f"Failed to describe job {job_id}: {e} @{now}")

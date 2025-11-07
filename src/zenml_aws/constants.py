@@ -26,8 +26,17 @@ class AWSBatchTag(StrEnum):
 
 class AWSBatchJobStatus(StrEnum):
     submitted: str = "SUBMITTED"
+    pending: str = "PENDING"
     runnable: str = "RUNNABLE"
     starting: str = "STARTING"
     running: str = "RUNNING"
     succeeded: str = "SUCCEEDED"
     failed: str = "FAILED"
+
+
+class AWSStateMachineExecutionStatus(StrEnum):
+    running: str = "RUNNING"
+    succeeded: str = "SUCCEEDED"
+    failed: str = "FAILED"
+    timed_out: str = "TIMED_OUT"
+    aborted: str = "ABORTED"

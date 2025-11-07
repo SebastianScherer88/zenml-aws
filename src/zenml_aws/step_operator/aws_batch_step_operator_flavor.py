@@ -62,6 +62,11 @@ class AWSBatchStepOperatorSettings(BaseSettings):
         description="The number of seconds before AWS Batch times out the "
         "step's job.",
     )
+    poll_interval_seconds: bool = Field(
+        default=20,
+        description="The number of seconds to wait between pipeline status "
+        "polling calls. Only relevant if `wait_for_completion` was set to True.",
+    )
 
 
 class AWSBatchStepOperatorConfig(BaseStepOperatorConfig, AWSBatchStepOperatorSettings):

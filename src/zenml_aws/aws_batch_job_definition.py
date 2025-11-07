@@ -266,7 +266,7 @@ class AWSBatchJobDefinition(BaseModel):
         except AttributeError:
             pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
             step_backend = pipeline_config.backend
-            step_timeout_seconds = pipeline_config.timeout_seconds
+            step_timeout_seconds = pipeline_config.timeout_seconds_step
             step_tags.update(**pipeline_config.tags)
             step_assign_public_ip = pipeline_config.assign_public_ip
 

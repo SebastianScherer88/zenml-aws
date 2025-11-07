@@ -42,9 +42,23 @@ class AWSStepFunctionsOrchestratorSettings(BaseSettings):
         description="Sets the network configuration's assignPublicIp field."
         "Only relevant for FARGATE backend steps.",
     )
+    timeout_seconds_step: PositiveInt = Field(
+        default=900,
+        description="The number of seconds before AWS Batch times out a step's" " job.",
+    )
     timeout_seconds: PositiveInt = Field(
         default=3600,
-        description="The number of seconds before AWS Batch times out a step's" " job.",
+        description="The number of seconds before AWS Stepfunctions times out"
+        "the pipeline's state machine execution.",
+    )
+    wait_for_completion: bool = Field(
+        default=True,
+        description="Whether to block and wait for completion after submission.",
+    )
+    poll_interval_seconds: bool = Field(
+        default=20,
+        description="The number of seconds to wait between pipeline status "
+        "polling calls. Only relevant if `wait_for_completion` was set to True.",
     )
 
 
