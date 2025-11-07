@@ -12,19 +12,19 @@ docker_settings = DockerSettings(
 )
 
 
-@step(name="greet", step_operator=True)
+@step(name="greet", step_operator=True, environment={"test-a": "A"})
 def test_greet(name: str) -> str:
     """A simple step that returns a greeting message."""
     return f"Hello {name}!"
 
 
-@step(name="report", step_operator=True)
+@step(name="report", step_operator=True, environment={"test-b": "B"})
 def test_report(message: str) -> str:
     """A simple step that reports on a greeting."""
     return f"The message was '{message}'!"
 
 
-@pipeline(settings={"docker": docker_settings})
+@pipeline(settings={"docker": docker_settings}, environment={"test-c": "C"})
 def test_pipeline(name: str):
     """A simple pipeline with just one step."""
     greeting = test_greet(name)
@@ -45,21 +45,44 @@ def test_pipeline(name: str):
 def main(backend: str, cpu: str, memory: str, job_queue: str):
     click.echo(f"{backend}, {cpu}, {memory}, {job_queue}")
 
-    step_settings = {
+    pipeline_settings = settings = {
         "resources": ResourceSettings(
             cpu_count=cpu, memory=f"{memory}MiB"
         ).model_dump(),
-        "step_operator.aws_batch": AWSBatchStepOperatorSettings(
-            job_queue_name=job_queue,
-            backend=backend,
-            environment={
-                "ZENML_STORE_USERNAME": "zenml",
-                "ZENML_STORE_PASSWORD": "password",
-            },
-        ).model_dump(),
     }
+    pipeline_environment = {
+        "ZENML_STORE_USERNAME": "zenml",
+        "ZENML_STORE_PASSWORD": "password",
+    }
+    test_pipeline.configure(
+        settings=pipeline_settings, environment=pipeline_environment
+    )
 
-    test_pipeline.with_options(settings=step_settings, enable_cache=False)("Sebastian")
+    step_configurations = {
+        "greet": {
+            "settings": {
+                "step_operator": AWSBatchStepOperatorSettings(
+                    job_queue_name=job_queue,
+                    backend=backend,
+                ).model_dump(),
+            },
+        },
+        "report": {
+            "settings": {
+                "resources": ResourceSettings(
+                    cpu_count=2 * cpu, memory=f"{2*memory}MiB"
+                ),
+                "step_operator": AWSBatchStepOperatorSettings(
+                    job_queue_name=job_queue,
+                    backend=backend,
+                ).model_dump(),
+            },
+            "environment": {"test-d": "D"},
+        },
+    }
+    test_pipeline.with_options(
+        settings=settings, step_configurations=step_configurations, enable_cache=False
+    )("Sebastian")
 
 
 if __name__ == "__main__":

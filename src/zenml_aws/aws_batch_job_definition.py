@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 from string import ascii_letters, digits
-from typing import Dict, List, Literal, cast
+from typing import Callable, Dict, List, Literal, cast
 
 from pydantic import (
     BaseModel,
@@ -17,15 +17,25 @@ from pydantic import (
     model_serializer,
 )
 from zenml.config import ResourceSettings
+from zenml.config.step_configurations import Step
 from zenml.config.step_run_info import StepRunInfo
+from zenml.entrypoints import StepEntrypointConfiguration
 from zenml.logger import get_logger
+from zenml.models import PipelineSnapshotResponse
+from zenml.orchestrators import ContainerizedOrchestrator
+from zenml.step_operators import BaseStepOperator
 
 from zenml_aws.constants import (
     AWS_BATCH_JOB_DEFAULT_NAME,
+    AWS_BATCH_STEP_OPERATOR_FLAVOR,
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchTag,
 )
+from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
+    AWSStepFunctionsOrchestratorConfig,
+)
 from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+    AWSBatchStepOperatorConfig,
     AWSBatchStepOperatorSettings,
 )
 
@@ -222,16 +232,80 @@ class AWSBatchJobDefinition(BaseModel):
     @classmethod
     def from_orchestrator(
         cls,
-        orchestrator: "AWSStepFunctionsOrchestrator",  #  noqa: F821
+        orchestrator: ContainerizedOrchestrator,  # | "AWSBatchOrchestrator",
+        step: Step,
+        snapshot: PipelineSnapshotResponse,
+        environment: Dict[str, str],
+        get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
     ) -> "AWSBatchJobDefinition":
         """Utility to instantiate a class instance from the arguments
         accessible inside the AWSStepFunctionsOrchestrator's `submit_pipeline`
         method.."""
 
+        step_resource_settings: ResourceSettings = step.config.resource_settings
+
+        # assemble container command
+        command = StepEntrypointConfiguration.get_entrypoint_command()
+        arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
+            step_name=step.config.name,
+            snapshot_id=snapshot.id,
+        )
+        command_and_arguments = command + arguments
+
+        # use step settings if AWSBatchStepOperator is configured for the step,
+        # otherwise fall back to orchestrator defaults
+        step_settings: AWSBatchStepOperatorSettings | None = step.config.settings.get(
+            f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
+        )
+        step_tags = {}
+        try:
+            step_backend = step_settings.backend
+            step_timeout_seconds = step_settings.timeout_seconds
+            step_tags.update(**step_settings.tags)
+            step_assign_public_ip = step_settings.assign_public_ip
+        except AttributeError:
+            pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
+            step_backend = pipeline_config.backend
+            step_timeout_seconds = pipeline_config.timeout_seconds_step
+            step_tags.update(**pipeline_config.tags)
+            step_assign_public_ip = pipeline_config.assign_public_ip
+
+        orchestrator.settings_class
+
+        container_kwargs = {}
+
+        if step_backend == "EC2":
+            AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
+            AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
+
+        elif step_backend == "FARGATE":
+            AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
+            AWSBatchContainerProperties = (
+                AWSBatchJobDefinitionFargateContainerProperties
+            )
+            container_kwargs["networkConfiguration"] = {
+                "assignPublicIp": step_assign_public_ip
+            }
+
+        return AWSBatchJobDefinitionClass(
+            timeout={"attemptDurationSeconds": step_timeout_seconds},
+            type="container",
+            tags=step_tags,
+            containerProperties=AWSBatchContainerProperties(
+                executionRoleArn=pipeline_config.batch_execution_role,
+                jobRoleArn=pipeline_config.batch_job_role,
+                image=get_image_fn(snapshot, step.config.name),
+                command=command_and_arguments,
+                environment=map_environment(environment),
+                resourceRequirements=map_resource_settings(step_resource_settings),
+                **container_kwargs,
+            ),
+        )
+
     @classmethod
     def from_step_operator(
         cls,
-        step_operator: "AWSBatchStepOperator",  #  noqa: F821
+        step_operator: BaseStepOperator,
         info: StepRunInfo,
         entrypoint_command: List[str],
         environment: Dict[str, str],
@@ -243,10 +317,7 @@ class AWSBatchJobDefinition(BaseModel):
             AWSBatchStepOperatorSettings, step_operator.get_settings(info)
         )
 
-        # if the step's settings include environment variables, update the
-        # pipeline environment variables before submitting
-        if step_settings.environment:
-            environment.update(step_settings.environment)
+        step_config: AWSBatchStepOperatorConfig = step_operator.config
 
         # if the step's settings include tags, update the system tags before
         # submitting
@@ -274,8 +345,8 @@ class AWSBatchJobDefinition(BaseModel):
             type="container",
             tags=tags,
             containerProperties=AWSBatchContainerProperties(
-                executionRoleArn=step_operator.config.execution_role,
-                jobRoleArn=step_operator.config.job_role,
+                executionRoleArn=step_config.execution_role,
+                jobRoleArn=step_config.job_role,
                 image=info.get_image(key=BATCH_DOCKER_IMAGE_KEY),
                 command=entrypoint_command,
                 environment=map_environment(environment),
@@ -296,7 +367,7 @@ class AWSBatchJobDefinition(BaseModel):
             AWSBatchTag.step_run_id: str(info.step_run_id),
         }
 
-    def generate_name(self, info: StepRunInfo) -> str:
+    def generate_name(self, pipeline_name: str, step_name: str) -> str:
         """Utility to generate a unique AWS Batch job name.
 
         Args:
@@ -310,8 +381,8 @@ class AWSBatchJobDefinition(BaseModel):
         # We sanitize the pipeline and step names before concatenating,
         # capping at 115 chars and finally suffixing with a 10 character random
         # string, which (with the two hyphens) leaves us at 127 chars.
-        sanitized_pipeline_name = sanitize_name(info.pipeline.name, 30)
-        sanitized_step_name = sanitize_name(info.pipeline_step_name, 30)
+        sanitized_pipeline_name = sanitize_name(pipeline_name, 30)
+        sanitized_step_name = sanitize_name(step_name, 30)
 
         job_name = f"{sanitized_pipeline_name}-{sanitized_step_name}"
         return f"{job_name}-{self.to_hash()}"
@@ -434,3 +505,69 @@ def sanitize_name(name: str, max_length: int) -> bool:
         sanitized_name += char if char in valid_characters else "-"
 
     return sanitized_name[:max_length]
+
+
+def check_existing_batch_job_definition(
+    batch_client, batch_job_definition_name: str
+) -> dict:
+    """Checks AWS for an active AWS Batch job definition under the give name.
+
+    Args:
+        batch_client (_type_): The AWS Batch client instance
+        job_definition_name (str): The name of the AWS Batch job definition
+
+    Returns:
+        dict: The latest AWS Batch job definition found, or an empty dict
+            otherwise.
+    """
+
+    response = batch_client.describe_job_definitions(
+        jobDefinitionName=batch_job_definition_name, status="ACTIVE"
+    )
+
+    batch_job_definitions = response.get(
+        "jobDefinitions",
+        [
+            {},
+        ],
+    )
+
+    try:
+        existing_job_definition = sorted(
+            batch_job_definitions, key=lambda revision: revision["revision"]
+        )[0]
+        batch_job_definition_arn = existing_job_definition.get("jobDefinitionArn", "")
+        batch_job_definition_revision = existing_job_definition.get("revision", "")
+        logger.info(
+            f"Found Existing AWS Batch job definition {batch_job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
+        )
+    except IndexError:
+        return {}
+
+
+def register_new_batch_job_definition(
+    batch_client, batch_job_definition: AWSBatchJobDefinition
+):
+    """Registers a new AWS Batch job definition.
+
+    Args:
+        batch_client (_type_): The AWS Batch client instance
+        job_definition (AWSBatchJobDefinition): The name of the AWS Batch job definition
+    """
+
+    response = batch_client.register_job_definition(**batch_job_definition.model_dump())
+
+    batch_job_definition_registered_successfully = (
+        response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 200
+    ) and "jobDefinitionArn" in response
+
+    if batch_job_definition_registered_successfully:
+        batch_job_definition_arn = response.get("jobDefinitionArn", "")
+        batch_job_definition_revision = response.get("revision", "")
+        logger.info(
+            f"Registered AWS Batch job definition {batch_job_definition.jobDefinitionName}. "
+            f"ARN: {batch_job_definition_arn}. Revision: "
+            f"{batch_job_definition_revision}."
+        )
+    else:
+        logger.error(f"Could not register new AWS Batch job definition: {response}")

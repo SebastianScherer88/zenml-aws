@@ -13,7 +13,7 @@
 #  permissions and limitations under the License.
 """AWS Batch Step operator flavor."""
 
-from typing import Dict, Literal, Optional, Type
+from typing import Literal, Optional, Type
 
 from pydantic import Field, PositiveInt
 from zenml.config.base_settings import BaseSettings
@@ -33,11 +33,6 @@ from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR
 class AWSBatchStepOperatorSettings(BaseSettings):
     """Settings for the Sagemaker step operator."""
 
-    environment: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Environment variables to pass to the container during "
-        "execution. Example: {'LOG_LEVEL': 'INFO', 'DEBUG_MODE': 'False'}",
-    )
     job_queue_name: str = Field(
         default="",
         description="The AWS Batch job queue to submit the step AWS Batch job"
@@ -64,7 +59,13 @@ class AWSBatchStepOperatorSettings(BaseSettings):
     )
     timeout_seconds: PositiveInt = Field(
         default=3600,
-        description="The number of seconds before AWS Batch times out the job.",
+        description="The number of seconds before AWS Batch times out the "
+        "step's job.",
+    )
+    poll_interval_seconds: bool = Field(
+        default=20,
+        description="The number of seconds to wait between pipeline status "
+        "polling calls. Only relevant if `wait_for_completion` was set to True.",
     )
 
 
@@ -81,9 +82,6 @@ class AWSBatchStepOperatorConfig(BaseStepOperatorConfig, AWSBatchStepOperatorSet
         description="The IAM role arn of the ECS execution role."
     )
     job_role: str = Field(description="The IAM role arn of the ECS job role.")
-    default_job_queue_name: str = Field(
-        description="The default AWS Batch job queue to submit AWS Batch jobs to."
-    )
     aws_access_key_id: Optional[str] = SecretField(
         default=None,
         description="The AWS access key ID to use to authenticate to AWS. "

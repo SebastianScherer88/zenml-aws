@@ -194,17 +194,23 @@ test_fargate_job_queue = aws.batch.JobQueue(
     ],
 )
 
-# --- batch: submission role
-test_submission_role = aws.iam.Role(
-    "batch-submission-role",
-    name="batch-submission-role",
+# --- stepfunctions: execution role
+test_stepfunctions_execution_role = aws.iam.Role(
+    "stepfunctions-execution-role",
+    name="stepfunctions-execution-role",
     assume_role_policy=json.dumps(
         {
             "Version": "2012-10-17",
             "Statement": [
                 {
                     "Effect": "Allow",
-                    "Principal": {"AWS": "arn:aws:iam::743582000746:root"},
+                    "Principal": {
+                        "AWS": "arn:aws:iam::743582000746:root",
+                        "Service": [
+                            "states.amazonaws.com",
+                            "states.eu-west-1.amazonaws.com",
+                        ],
+                    },
                     "Action": "sts:AssumeRole",
                 }
             ],
@@ -212,15 +218,15 @@ test_submission_role = aws.iam.Role(
     ),
 )
 
-test_submission_policy_attachment = aws.iam.PolicyAttachment(
-    resource_name="AWSBatchTestAdminPolicyAttachment",
-    name="AWSBatchTestAdminPolicyAttachment",
-    roles=[test_submission_role.name],
+test_stepfunctions_execution_policy_attachment = aws.iam.PolicyAttachment(
+    resource_name="AWSStepfunctionsExecutionRolePolicyAttachment",
+    name="AWSStepfunctionsExecutionRolePolicyAttachment",
+    roles=[test_stepfunctions_execution_role.name],
     policy_arn="arn:aws:iam::aws:policy/AdministratorAccess",
 )
 
 # --- ecs: job role
-test_job_role = aws.iam.Role(
+test_batch_job_role = aws.iam.Role(
     "batch-job-role",
     name="batch-job-role",
     assume_role_policy="""{
@@ -238,13 +244,13 @@ test_job_role = aws.iam.Role(
 # Attach minimal policy (e.g., S3 read-only)
 aws.iam.RolePolicyAttachment(
     "batch-job-role-s3",
-    role=test_job_role.name,
+    role=test_batch_job_role.name,
     policy_arn="arn:aws:iam::aws:policy/AmazonS3FullAccess",
 )
 
 # --- ecs: execution role
 # Execution Role: ECS agent pulls images / pushes logs
-test_execution_role = aws.iam.Role(
+test_batch_execution_role = aws.iam.Role(
     "batch-execution-role",
     name="batch-execution-role",
     assume_role_policy="""{
@@ -261,19 +267,22 @@ test_execution_role = aws.iam.Role(
 
 aws.iam.RolePolicyAttachment(
     "batch-execution-role-policy",
-    role=test_execution_role.name,
+    role=test_batch_execution_role.name,
     policy_arn="arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
 )
 
 pulumi.export("test-subnets", test_subnets.ids)
-pulumi.export("test-submission-role-arn", test_submission_role.arn)
+# pulumi.export("test-submission-role-arn", test_submission_role.arn)
 pulumi.export("zenml-metadata-store-url", test_meta_data.urn)
 pulumi.export("zenml-metadata-store-address", test_meta_data.address)
 pulumi.export("zenml-container-registry-arn", test_ecr_repo.arn)
 pulumi.export("zenml-container-registry-url", test_ecr_repo.repository_url)
 pulumi.export("zenml-artifact-store-arn", test_s3_bucket.arn)
 pulumi.export("zenml-artifact-store-bucket-name", test_s3_bucket.bucket)
-pulumi.export("test-job-ec2-queue-name", test_ec2_job_queue.name)
-pulumi.export("test-job-fargate-queue-name", test_fargate_job_queue.name)
-pulumi.export("test-job-role-arn", test_job_role.arn)
-pulumi.export("test-execution-role-arn", test_execution_role.arn)
+pulumi.export("test-batch-job-ec2-queue-name", test_ec2_job_queue.name)
+pulumi.export("test-batch-job-fargate-queue-name", test_fargate_job_queue.name)
+pulumi.export("test-batch-job-role-arn", test_batch_job_role.arn)
+pulumi.export("test-batch-execution-role-arn", test_batch_execution_role.arn)
+pulumi.export(
+    "test-stepfunctions-execution-role-arn", test_stepfunctions_execution_role.arn
+)
