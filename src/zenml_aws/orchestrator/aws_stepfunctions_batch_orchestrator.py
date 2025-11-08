@@ -301,7 +301,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                     )
                     status: AWSStateMachineExecutionStatus = response["status"]
                     logger.info(
-                        f"Status of state machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} is: [{status}] @{now}."
+                        f"Status of state machine execution ARN {execution_arn}: [{status}] @{now}."
                     )
 
                     if status == AWSStateMachineExecutionStatus.running:
@@ -320,6 +320,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                         stepfunction_client.delete_state_machine(
                             stateMachineArn=state_machine_arn
                         )
+                        logger.warning(
+                            f"Successfully deleted state machine {state_machine_arn} @ {now}"
+                        )
                     except Exception as e:
                         logger.warning(f"Failed to delete state machine: {e}")
 
@@ -329,7 +332,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                     AWSStateMachineExecutionStatus.timed_out,
                 ):
                     raise RuntimeError(
-                        f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} failed with status {status}: {response} @{now}"
+                        f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} failed: [{status}]: {response} @{now}"
                     )
         else:
             wait_for_completion = None
