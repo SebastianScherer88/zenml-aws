@@ -27,7 +27,7 @@ from zenml.step_operators.base_step_operator import (
 )
 from zenml.utils.secret_utils import SecretField
 
-from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR
+from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR, AWSBatchJobStatus
 
 
 class AWSBatchStepOperatorSettings(BaseSettings):
@@ -62,10 +62,18 @@ class AWSBatchStepOperatorSettings(BaseSettings):
         description="The number of seconds before AWS Batch times out the "
         "step's job.",
     )
-    poll_interval_seconds: bool = Field(
+    poll_interval_seconds: float = Field(
         default=20,
         description="The number of seconds to wait between pipeline status "
         "polling calls. Only relevant if `wait_for_completion` was set to True.",
+    )
+    delete_resources_on: list[AWSBatchJobStatus] = Field(
+        description="The AWS Batch job outcomes that will trigger the"
+        " clean up of all associated AWS Batch resources. Supported values are:"
+        " SUCCEEDED, FAILED. Defaults to SUCCEEDED.",
+        default=[
+            AWSBatchJobStatus.succeeded,
+        ],
     )
 
 

@@ -217,6 +217,10 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             Optional submission result.
         """
 
+        # meta = snapshot.metadata.model_dump()
+        # meta.update({'test':'metadata'})
+        # snapshot.metadata = meta
+
         boto_session = self._get_aws_session()
         batch_client = boto_session.client("batch")
 
@@ -296,34 +300,39 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                         executionArn=execution_arn
                     )
                     status: AWSStateMachineExecutionStatus = response["status"]
+                    logger.info(
+                        f"Status of state machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} is: [{status}] @{now}."
+                    )
 
                     if status == AWSStateMachineExecutionStatus.running:
-                        logger.info(
-                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} is running @{now}."
-                        )
-                    elif status == AWSStateMachineExecutionStatus.succeeded:
-                        logger.info(
-                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} completed successfully @{now}."
-                        )
-                        break
+                        time.sleep(self.config.poll_interval_seconds)
                     elif status in (
+                        AWSStateMachineExecutionStatus.succeeded,
                         AWSStateMachineExecutionStatus.failed,
                         AWSStateMachineExecutionStatus.aborted,
                         AWSStateMachineExecutionStatus.timed_out,
                     ):
-                        raise RuntimeError(
-                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} failed with status {status} @{now}"
-                        )
+                        break
 
-                    time.sleep(self.config.poll_interval_seconds)
+                if status in self.config.delete_stepfunctions_resource_on:
+                    # clean up state machine
+                    try:
+                        stepfunction_client.delete_state_machine(
+                            stateMachineArn=state_machine_arn
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to delete state machine: {e}")
+
+                if status in (
+                    AWSStateMachineExecutionStatus.failed,
+                    AWSStateMachineExecutionStatus.aborted,
+                    AWSStateMachineExecutionStatus.timed_out,
+                ):
+                    raise RuntimeError(
+                        f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} failed with status {status}: {response} @{now}"
+                    )
         else:
             wait_for_completion = None
-
-        # Generate metadata using the standalone function
-        try:
-            stepfunction_client.delete_state_machine(stateMachineArn=state_machine_arn)
-        except Exception as e:
-            logger.warning(f"Failed to delete state machine: {e}")
 
         return SubmissionResult(
             wait_for_completion=wait_for_completion,
@@ -402,6 +411,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             type="STANDARD",
             tags=self.map_tags(self.config.tags),
         )
+
         try:
             state_machine_arn = response["stateMachineArn"]
             logger.info(

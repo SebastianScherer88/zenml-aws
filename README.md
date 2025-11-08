@@ -67,7 +67,7 @@ aws ecr get-login-password --region eu-west-1 | docker login --username AWS --pa
 To build a zenml docker image that can run remotely, run:
 
 ```bash
-docker build -f infrastructure\Dockerfile . -t 743582000746.dkr.ecr.eu-west-1.amazonaws.com/zenml:latest
+docker build -f infrastructure\docker\component\Dockerfile . -t 743582000746.dkr.ecr.eu-west-1.amazonaws.com/zenml:latest
 docker push 743582000746.dkr.ecr.eu-west-1.amazonaws.com/zenml:latest
 ```
 

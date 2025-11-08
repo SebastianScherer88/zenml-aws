@@ -12,7 +12,10 @@ from zenml.orchestrators import BaseOrchestratorConfig
 from zenml.orchestrators.base_orchestrator import BaseOrchestratorFlavor
 from zenml.utils.secret_utils import SecretField
 
-from zenml_aws.constants import AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR
+from zenml_aws.constants import (
+    AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR,
+    AWSStateMachineExecutionStatus,
+)
 
 
 class AWSStepFunctionsOrchestratorSettings(BaseSettings):
@@ -55,10 +58,28 @@ class AWSStepFunctionsOrchestratorSettings(BaseSettings):
         default=True,
         description="Whether to block and wait for completion after submission.",
     )
-    poll_interval_seconds: bool = Field(
+    poll_interval_seconds: float = Field(
         default=20,
         description="The number of seconds to wait between pipeline status "
         "polling calls. Only relevant if `wait_for_completion` was set to True.",
+    )
+    delete_stepfunctions_resource_on: list[AWSStateMachineExecutionStatus] = Field(
+        description="The AWS Stepfunction execution outcomes that will trigger the"
+        " clean up of all associated AWS Stepfunction resources. Only used if "
+        "`wait_for_completion` is set to True. Supported values are: SUCCEEDED,"
+        "FAILED, TIMED_OUT, ABORTED. Defaults to SUCCEEDED.",
+        default=[
+            AWSStateMachineExecutionStatus.succeeded,
+        ],
+    )
+    delete_batch_resources_on: list[AWSStateMachineExecutionStatus] = Field(
+        description="The AWS Stepfunction execution outcomes that will trigger the"
+        " clean up of all associated AWS Batch resources. Only used if "
+        "`wait_for_completion` is set to True. Supported values are: SUCCEEDED,"
+        "FAILED, TIMED_OUT, ABORTED. Defaults to SUCCEEDED.",
+        default=[
+            AWSStateMachineExecutionStatus.succeeded,
+        ],
     )
 
 
