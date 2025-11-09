@@ -250,7 +250,7 @@ class AWSBatchStepOperator(BaseStepOperator):
         if status in self.config.delete_resources_on:
             # clean up job description
             try:
-                batch_client.delete_job_definition(jobDefinitionArn=job_definition_arn)
+                batch_client.deregister_job_definition(jobDefinition=job_definition_arn)
                 logger.info(
                     f"Successfully deleted job definition {job_definition_arn} @ {now}"
                 )
