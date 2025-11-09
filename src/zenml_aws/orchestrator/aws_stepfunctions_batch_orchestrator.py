@@ -43,7 +43,7 @@ from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
     AWSStepFunctionsOrchestratorConfig,
     AWSStepFunctionsOrchestratorSettings,
 )
-from zenml_aws.schema import AWSStepFunctionPipelineMetadata
+from zenml_aws.schema import AWSStepfunctionOrchestratorMetaData
 from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorSettings,
 )
@@ -256,15 +256,11 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 logger.info(
                     f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
                 )
-                (
-                    step_aws_batch_job_definition_arn,
-                    step_aws_batch_job_definition_revision,
-                ) = register_new_batch_job_definition(
-                    batch_client,
-                    step_aws_batch_job_definition,
-                )
                 step_name_to_arn_and_revision[step_name] = (
-                    f"{step_aws_batch_job_definition_arn}:{step_aws_batch_job_definition_revision}"
+                    register_new_batch_job_definition(
+                        batch_client,
+                        step_aws_batch_job_definition,
+                    )
                 )
 
         # assemble and run as stepfunctions state machine
@@ -352,7 +348,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         return SubmissionResult(
             wait_for_completion=wait_for_completion,
-            metadata=AWSStepFunctionPipelineMetadata.from_arns(
+            metadata=AWSStepfunctionOrchestratorMetaData.from_arns(
                 state_machine_arn=state_machine_arn,
                 state_machine_execution_arn=execution_arn,
                 step_meta_data=step_meta_data,

@@ -79,7 +79,7 @@ commands.
 Login with the remote SQL zenml store directly:
 
 ```bash
-zenml login mysql://zenml:password@zenml-metdata-storedbd4e9b.c1cyu4q20nag.eu-west-1.rds.amazonaws.com:3306/zenml
+zenml login mysql://zenml:password@zenml-metdata-store992d729.c1cyu4q20nag.eu-west-1.rds.amazonaws.com:3306/zenml
 ```
 
 Register the git repository as a local zenml repository:
@@ -121,7 +121,7 @@ zenml container-registry register aws-ecr -f aws --uri=743582000746.dkr.ecr.eu-w
 Register a remote type S3 artifact store component:
 
 ```bash
-zenml artifact-store register aws-s3 -f s3 --path=s3://zenml-artifact-store-6da7888
+zenml artifact-store register aws-s3 -f s3 --path=s3://zenml-artifact-store-29182ff
 ```
 
 Register a `zenml-aws-test` zenml stack with the components:

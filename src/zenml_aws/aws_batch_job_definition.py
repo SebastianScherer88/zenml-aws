@@ -593,7 +593,7 @@ def check_existing_batch_job_definition(
 
 def register_new_batch_job_definition(
     batch_client, batch_job_definition: AWSBatchJobDefinition
-) -> tuple[str | None, str | None]:
+) -> str | None:
     """Registers a new AWS Batch job definition.
 
     Args:
@@ -615,7 +615,7 @@ def register_new_batch_job_definition(
             f"ARN: {batch_job_definition_arn}. Revision: "
             f"{batch_job_definition_revision}."
         )
-        return batch_job_definition_arn, batch_job_definition_revision
+        return batch_job_definition_arn
     else:
         logger.error(f"Could not register new AWS Batch job definition: {response}")
-        return None, None
+        return None
