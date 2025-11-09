@@ -247,7 +247,7 @@ class AWSBatchStepOperator(BaseStepOperator):
             elif status in (AWSBatchJobStatus.succeeded, AWSBatchJobStatus.failed):
                 break
 
-        if status in self.config.delete_stepfunctions_resource_on:
+        if status in self.config.delete_resources_on:
             # clean up job description
             try:
                 batch_client.delete_job_definition(jobDefinitionArn=job_definition_arn)
@@ -336,4 +336,4 @@ class AWSBatchStepOperator(BaseStepOperator):
         )
 
         # await job outcome
-        self.await_job(batch_client, job_id)
+        self.await_job(batch_client, job_id, job_definition_arn)

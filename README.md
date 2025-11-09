@@ -144,7 +144,7 @@ zenml stack delete test-step-operator -y
 zenml step-operator delete aws-batch
 zenml step-operator flavor delete aws_batch
 zenml step-operator flavor register zenml_aws.step_operator.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
-zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=ENABLED --timeout_seconds=900 --aws_profile=pulumi
+zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=ENABLED --timeout_seconds=900 --aws_profile=pulumi --delete_resources_on="[\"SUCCEEDED\"]"
 zenml stack register test-step-operator -a default -o default -c aws-ecr -s aws-batch -a aws-s3
 zenml stack set test-step-operator
 ```
