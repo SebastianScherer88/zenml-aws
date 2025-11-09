@@ -36,7 +36,8 @@ class AWSBatchStepStepMetadata(BaseModel):
         job_definition_url = f"https://{region}.console.aws.amazon.com/batch/home?region={region}#job-definition/{job_backend}/detail/{job_definition_arn}"
 
         if job_arn:
-            _, _, _, region, account_id, _, job_id = job_arn.split(":")
+            _, _, _, region, account_id, prefixed_job_id = job_arn.split(":")
+            _, job_id = prefixed_job_id.split("/")
             job_url = f"https://{region}.console.aws.amazon.com/batch/home?region={region}#jobs/{job_backend}/detail/{job_id}"
         else:
             job_url = job_id = ""
@@ -100,8 +101,8 @@ class AWSStepFunctionPipelineMetadata(BaseModel):
 
 
 class AWSStepfunctionOrchestratorMetaData(BaseModel):
-    pipeline: AWSStepFunctionPipelineMetadata
-    steps: dict[str, AWSBatchStepStepMetadata]
+    aws_stepfunctions: AWSStepFunctionPipelineMetadata
+    aws_batch: dict[str, AWSBatchStepStepMetadata]
 
     model_config = ConfigDict(
         serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=False

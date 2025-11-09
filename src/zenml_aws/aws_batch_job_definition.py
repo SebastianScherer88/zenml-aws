@@ -555,7 +555,7 @@ def sanitize_name(name: str, max_length: int) -> bool:
 
 def check_existing_batch_job_definition(
     batch_client, batch_job_definition_name: str
-) -> dict:
+) -> str | None:
     """Checks AWS for an active AWS Batch job definition under the give name.
 
     Args:
@@ -587,8 +587,9 @@ def check_existing_batch_job_definition(
         logger.info(
             f"Found Existing AWS Batch job definition {batch_job_definition_name}. ARN: {batch_job_definition_arn}. Revision: {batch_job_definition_revision}"
         )
+        return batch_job_definition_arn
     except IndexError:
-        return {}
+        return None
 
 
 def register_new_batch_job_definition(

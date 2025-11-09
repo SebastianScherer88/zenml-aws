@@ -300,7 +300,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                     )
                     status: AWSStateMachineExecutionStatus = response["status"]
                     logger.info(
-                        f"Status of state machine execution ARN {execution_arn}: [{status}] @{now}."
+                        f"Status of state machine execution {execution_arn}: [{status}] @{now}."
                     )
 
                     if status == AWSStateMachineExecutionStatus.running:
@@ -323,7 +323,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                             f"Successfully deleted state machine {state_machine_arn} @ {now}"
                         )
                     except Exception as e:
-                        logger.warning(f"Failed to delete state machine: {e}")
+                        logger.warning(
+                            f"Failed to delete state machine {state_machine_arn}: {e}"
+                        )
 
                 if status in (
                     AWSStateMachineExecutionStatus.failed,
