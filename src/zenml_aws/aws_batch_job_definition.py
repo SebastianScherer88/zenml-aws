@@ -7,6 +7,7 @@ import json
 import math
 from string import ascii_letters, digits
 from typing import Callable, Dict, List, Literal, cast
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -21,7 +22,7 @@ from zenml.config.step_configurations import Step
 from zenml.config.step_run_info import StepRunInfo
 from zenml.entrypoints import StepEntrypointConfiguration
 from zenml.logger import get_logger
-from zenml.models import PipelineSnapshotResponse
+from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
 from zenml.orchestrators import ContainerizedOrchestrator
 from zenml.step_operators import BaseStepOperator
 
@@ -234,7 +235,8 @@ class AWSBatchJobDefinition(BaseModel):
         cls,
         orchestrator: ContainerizedOrchestrator,  # | "AWSBatchOrchestrator",
         step: Step,
-        snapshot: PipelineSnapshotResponse,
+        step_run_id: UUID,
+        placeholder_run: PipelineRunResponse,
         environment: Dict[str, str],
         get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
     ) -> "AWSBatchJobDefinition":
@@ -248,53 +250,67 @@ class AWSBatchJobDefinition(BaseModel):
         command = StepEntrypointConfiguration.get_entrypoint_command()
         arguments = StepEntrypointConfiguration.get_entrypoint_arguments(
             step_name=step.config.name,
-            snapshot_id=snapshot.id,
+            snapshot_id=placeholder_run.snapshot.id,
         )
         command_and_arguments = command + arguments
 
-        # use step settings if AWSBatchStepOperator is configured for the step,
-        # otherwise fall back to orchestrator defaults
-        step_settings: AWSBatchStepOperatorSettings | None = step.config.settings.get(
-            f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
+        # We use the following settings resolution:
+        # 1. Check the step's configuration's `settings` attribute for the
+        #  official "step_operator.aws_batch" key. This will be populated if
+        # - the stack includes a step_operator component of the 'aws_batch'
+        # flavour implemented in this library's `step_operator` module, and
+        # - the step has been configured to use the "aws_batch" flavour step
+        #   operator
+        # 2. If step 1 doesnt yield any settings, we fall back on the
+        # orchestrator's configuration's `settings` attribute.
+        # NOTE: This means that for step level AWS Batch configurations, a
+        # registered aws_batch flavour step_operator component is required in
+        # the stack and the pipeline.
+        step_operator_settings: AWSBatchStepOperatorSettings | None = (
+            step.config.settings.get(
+                f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
+            )
         )
-        step_tags = {}
-        try:
-            step_backend = step_settings.backend
-            step_timeout_seconds = step_settings.timeout_seconds
-            step_tags.update(**step_settings.tags)
-            step_assign_public_ip = step_settings.assign_public_ip
-        except AttributeError:
-            pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
-            step_backend = pipeline_config.backend
-            step_timeout_seconds = pipeline_config.timeout_seconds_step
-            step_tags.update(**pipeline_config.tags)
-            step_assign_public_ip = pipeline_config.assign_public_ip
+        pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
+        # we always apply the stepfunction orchestrator tags
+        tags: dict[str, str] = cls.generate_tags(
+            placeholder_run=placeholder_run, step_name=step.config.name
+        )
 
-        orchestrator.settings_class
+        tags.update(pipeline_config.tags)
+        if step_operator_settings is None:
+            applied_config = pipeline_config
+            timeout_seconds = applied_config.timeout_seconds_step
+        else:
+            applied_config = step_operator_settings
+            timeout_seconds = applied_config.timeout_seconds
+            # step operator tags will overwrite orchestrator tags for shared
+            # keys
+            tags.update(applied_config.tags)
 
         container_kwargs = {}
 
-        if step_backend == "EC2":
+        if applied_config.backend == "EC2":
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
             AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
 
-        elif step_backend == "FARGATE":
+        elif applied_config.backend == "FARGATE":
             AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
             )
             container_kwargs["networkConfiguration"] = {
-                "assignPublicIp": step_assign_public_ip
+                "assignPublicIp": applied_config.assign_public_ip
             }
 
         return AWSBatchJobDefinitionClass(
-            timeout={"attemptDurationSeconds": step_timeout_seconds},
+            timeout={"attemptDurationSeconds": timeout_seconds},
             type="container",
-            tags=step_tags,
+            tags=tags,
             containerProperties=AWSBatchContainerProperties(
                 executionRoleArn=pipeline_config.batch_execution_role,
                 jobRoleArn=pipeline_config.batch_job_role,
-                image=get_image_fn(snapshot, step.config.name),
+                image=get_image_fn(placeholder_run.snapshot, step.config.name),
                 command=command_and_arguments,
                 environment=map_environment(environment),
                 resourceRequirements=map_resource_settings(step_resource_settings),
@@ -322,8 +338,7 @@ class AWSBatchJobDefinition(BaseModel):
         # if the step's settings include tags, update the system tags before
         # submitting
         tags = cls.generate_tags(info)
-        if step_settings.tags:
-            tags.update(step_settings.tags)
+        tags.update(step_settings.tags)
 
         container_kwargs = {}
 
@@ -358,14 +373,26 @@ class AWSBatchJobDefinition(BaseModel):
         )
 
     @staticmethod
-    def generate_tags(info: StepRunInfo) -> dict[str, str]:
-        return {
-            AWSBatchTag.pipeline_name: info.pipeline.name,
-            AWSBatchTag.pipeline_run_id: str(info.run_id),
-            AWSBatchTag.pipeline_run_name: info.run_name,
-            AWSBatchTag.step_name: info.pipeline_step_name,
-            AWSBatchTag.step_run_id: str(info.step_run_id),
-        }
+    def generate_tags(
+        info: StepRunInfo | None = None,
+        placeholder_run: PipelineRunResponse | None = None,
+        step_name: str | None = None,
+    ) -> dict[str, str]:
+        if info is not None:
+            return {
+                AWSBatchTag.pipeline_name: info.pipeline.name,
+                AWSBatchTag.pipeline_run_id: str(info.run_id),
+                AWSBatchTag.pipeline_run_name: info.run_name,
+                AWSBatchTag.step_name: info.pipeline_step_name,
+                AWSBatchTag.step_run_id: str(info.step_run_id),
+            }
+        else:
+            return {
+                AWSBatchTag.pipeline_name: placeholder_run.pipeline.name,
+                AWSBatchTag.pipeline_run_id: str(placeholder_run.id),
+                AWSBatchTag.pipeline_run_name: placeholder_run.name,
+                AWSBatchTag.step_name: step_name,
+            }
 
     def generate_name(self, pipeline_name: str, step_name: str) -> str:
         """Utility to generate a unique AWS Batch job name.

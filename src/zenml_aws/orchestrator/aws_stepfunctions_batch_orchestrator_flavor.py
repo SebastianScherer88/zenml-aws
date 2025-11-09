@@ -39,7 +39,6 @@ class AWSStepFunctionsOrchestratorSettings(BaseSettings):
         "Stepfunctions resources. For zenml meta tags added automatically, see"
         " the zenml.constants.AWSBatchTags class.",
     )
-
     assign_public_ip: Literal["ENABLED", "DISABLED"] = Field(
         default="ENABLED",
         description="Sets the network configuration's assignPublicIp field."

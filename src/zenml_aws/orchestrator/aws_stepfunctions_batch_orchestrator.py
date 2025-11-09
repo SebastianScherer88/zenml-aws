@@ -19,15 +19,10 @@ from typing import (
 
 import boto3
 from boto3 import Session
+from pydantic import BaseModel, ConfigDict
 from zenml.config.base_settings import BaseSettings
-from zenml.constants import (
-    METADATA_ORCHESTRATOR_LOGS_URL,
-    METADATA_ORCHESTRATOR_RUN_ID,
-    METADATA_ORCHESTRATOR_URL,
-)
 from zenml.enums import StackComponentType
 from zenml.logger import get_logger
-from zenml.metadata.metadata_types import MetadataType
 from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
 from zenml.orchestrators import ContainerizedOrchestrator, SubmissionResult
 from zenml.stack import Stack, StackValidator
@@ -40,6 +35,7 @@ from zenml_aws.aws_batch_job_definition import (
 )
 from zenml_aws.constants import (
     AWS_BATCH_STEP_OPERATOR_FLAVOR,
+    AWSBatchTag,
     AWSStateMachineExecutionStatus,
 )
 
@@ -56,6 +52,82 @@ logger = get_logger(__name__)
 
 ENV_ZENML_STEP_FUNCTIONS_RUN_ID = "ZENML_STEP_FUNCTIONS_RUN_ID"
 MAX_TASK_DEFINITION_VERSIONS = 50
+
+
+def prettify_alias(field_name: str) -> str:
+    # split on underscores, capitalize each word, join with spaces
+    return " ".join(word.capitalize() for word in field_name.split("_"))
+
+
+class AWSStepFunctionsOrchestratorStepMetadata(BaseModel):
+    step_name: str
+    step_job_definition_arn: str = "arn:aws:batch:eu-west-1:743582000746:job-definition/test_pipeline-report-3107f9b6e827dfea188b908889c4a6a798b8be4dc04a911f0e7bd8c17ddf3bd6:1"
+    step_job_definition_url: str = "https://eu-west-1.console.aws.amazon.com/batch/home?region=eu-west-1#job-definition/fargate/detail/arn:aws:batch:eu-west-1:743582000746:job-definition/test_pipeline-greet-1bad867ae8e979033581cc96d846613cf3c5701098062ff73b994c08812b5670:1"
+    step_job_arn: str = (
+        "arn:aws:batch:eu-west-1:743582000746:job/2a5c5eb6-ac54-48c0-bbe5-d0c0b1f025ce"
+    )
+    step_job_id: str = "2a5c5eb6-ac54-48c0-bbe5-d0c0b1f025ce"
+    step_job_url: str = "https://eu-west-1.console.aws.amazon.com/batch/home?region=eu-west-1#jobs/fargate/detail/2a5c5eb6-ac54-48c0-bbe5-d0c0b1f025ce"  # or 'ec2' instead of 'fargate'
+    step_job_logs_url: str = "https://eu-west-1.console.aws.amazon.com/cloudwatch/home?region=eu-west-1#logsV2:log-groups/log-group/%2Faws%2Fbatch%2Fjob/log-events/test_pipeline-report-3107f9b6e827dfea188b908889c4a6a798b8be4dc04a911f0e7bd8c17ddf3bd6%2Fdefault%2Fb8c540a286e0478297a81bfa923f4c65"
+
+    model_config = ConfigDict(
+        serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=False
+    )
+
+
+class AWSStepFunctionsOrchestratorPipelineMetadata(BaseModel):
+    state_machine_name: str = (
+        "test_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0"
+    )
+    state_machine_arn: str = "arn:aws:states:eu-west-1:743582000746:stateMachine:test_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0"
+    state_machine_url: str = "https://eu-west-1.console.aws.amazon.com/states/home?region=eu-west-1#/statemachines/view/arn%3Aaws%3Astates%3Aeu-west-1%3A743582000746%3AstateMachine%3Atest_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0?type=standard"
+    state_machine_execution_arn: str = "arn:aws:states:eu-west-1:743582000746:execution:test_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0:zenml-test_pipeline-1762619522"
+    state_machine_execution_url: str = "https://eu-west-1.console.aws.amazon.com/states/home?region=eu-west-1#/v2/executions/details/arn:aws:states:eu-west-1:743582000746:execution:test_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0:zenml-test_pipeline-1762619522"
+
+    model_config = ConfigDict(
+        serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=False
+    )
+
+
+class AWSStepFunctionsOrchestratorRunMetadata(BaseModel):
+    orchestrator_logs_url: str
+    orchestrator_run_id: str
+    orchestrator_url: str
+    pipeline: AWSStepFunctionsOrchestratorPipelineMetadata
+    steps: dict[str, AWSStepFunctionsOrchestratorStepMetadata]
+    state_machine_arn: str
+    state_machine_execution_arn: str
+    step_job_definitions: dict[str, str]
+
+    @classmethod
+    def from_pipeline(
+        cls,
+        state_machine_arn: str,
+        state_machine_execution_arn: str,
+        step_job_definitions: dict[str, str],
+    ) -> "AWSStepFunctionsOrchestratorRunMetadata":
+        region = state_machine_execution_arn.split(":")[3]
+
+        return cls(
+            orchestrator_run_id=state_machine_execution_arn,
+            orchestrator_url=(
+                f"https://{region}.console.aws.amazon.com/states/home"
+                f"?region={region}#/executions/details/{state_machine_execution_arn}"
+            ),
+            orchestrator_logs_url=(
+                f"https://{region}.console.aws.amazon.com/cloudwatch/home"
+                f"?region={region}#logsV2:log-groups/log-group/$252Faws$252F"
+                "batch$252Fjob"
+            ),
+            state_machine_arn=state_machine_arn,
+            state_machine_execution_arn=state_machine_execution_arn,
+            step_job_definitions=step_job_definitions,
+            pipeline=AWSStepFunctionsOrchestratorPipelineMetadata(),
+            steps={
+                step_name: AWSStepFunctionsOrchestratorStepMetadata(step_name=step_name)
+                for step_name in step_job_definitions.keys()
+            },
+        )
 
 
 class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
@@ -217,10 +289,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             Optional submission result.
         """
 
-        # meta = snapshot.metadata.model_dump()
-        # meta.update({'test':'metadata'})
-        # snapshot.metadata = meta
-
         boto_session = self._get_aws_session()
         batch_client = boto_session.client("batch")
 
@@ -230,13 +298,14 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             step_environment = {
                 **snapshot.pipeline_configuration.environment,
                 **step_environments[step_name],
-                ENV_ZENML_STEP_FUNCTIONS_RUN_ID: str(snapshot.id),
+                ENV_ZENML_STEP_FUNCTIONS_RUN_ID: str(placeholder_run.id),
             }
 
             step_aws_batch_job_definition = AWSBatchJobDefinition.from_orchestrator(
                 orchestrator=self,
                 step=step,
-                snapshot=snapshot,
+                step_run_id="test",
+                placeholder_run=placeholder_run,
                 environment=step_environment,
                 get_image_fn=self.get_image,
             )
@@ -280,6 +349,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         # Create and execute state machine using helper functions
         stepfunction_client = boto_session.client("stepfunctions")
         state_machine_arn = self.create_state_machine_from_definition(
+            placeholder_run=placeholder_run,
             stepfunction_client=stepfunction_client,
             name=f"{sanitize_name(snapshot.pipeline.name,30)}-{state_machine_definition_hash}",
             definition=state_machine_definition,
@@ -320,7 +390,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                         stepfunction_client.delete_state_machine(
                             stateMachineArn=state_machine_arn
                         )
-                        logger.warning(
+                        logger.info(
                             f"Successfully deleted state machine {state_machine_arn} @ {now}"
                         )
                     except Exception as e:
@@ -339,7 +409,11 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         return SubmissionResult(
             wait_for_completion=wait_for_completion,
-            metadata=generate_step_functions_metadata(execution_arn),
+            metadata=AWSStepFunctionsOrchestratorRunMetadata.from_pipeline(
+                state_machine_arn=state_machine_arn,
+                state_machine_execution_arn=execution_arn,
+                step_job_definitions=step_name_to_unique_job_definition_name,
+            ).model_dump(),
         )
 
     @staticmethod
@@ -392,6 +466,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
     def create_state_machine_from_definition(
         self,
+        placeholder_run: PipelineRunResponse,
         stepfunction_client: boto3.client,
         name: str,
         definition: Dict[str, Any],
@@ -407,12 +482,20 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         Returns:
             The ARN of the created state machine
         """
+
+        tags = [
+            {"key": AWSBatchTag.pipeline_name, "value": placeholder_run.pipeline.name},
+            {"key": AWSBatchTag.pipeline_run_id, "value": str(placeholder_run.id)},
+            {"key": AWSBatchTag.pipeline_run_name, "value": placeholder_run.name},
+        ]
+        tags.extend(self.map_tags(self.config.tags))
+
         response = stepfunction_client.create_state_machine(
             name=name,
             definition=json.dumps(definition),
             roleArn=self.config.stepfunctions_execution_role,
             type="STANDARD",
-            tags=self.map_tags(self.config.tags),
+            tags=tags,
         )
 
         try:
@@ -541,20 +624,3 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         }
 
         return definition
-
-
-def generate_step_functions_metadata(
-    execution_arn: str,
-) -> Dict[str, MetadataType]:
-    region = execution_arn.split(":")[3]
-    return {
-        METADATA_ORCHESTRATOR_RUN_ID: execution_arn,
-        METADATA_ORCHESTRATOR_URL: (
-            f"https://{region}.console.aws.amazon.com/states/home"
-            f"?region={region}#/executions/details/{execution_arn}"
-        ),
-        METADATA_ORCHESTRATOR_LOGS_URL: (
-            f"https://{region}.console.aws.amazon.com/cloudwatch/home"
-            f"?region={region}#logsV2:log-groups/log-group/$252Faws$252Fbatch$252Fjob"
-        ),
-    }
