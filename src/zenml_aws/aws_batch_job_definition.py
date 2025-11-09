@@ -378,6 +378,25 @@ class AWSBatchJobDefinition(BaseModel):
         placeholder_run: PipelineRunResponse | None = None,
         step_name: str | None = None,
     ) -> dict[str, str]:
+        """Creates zenml run meta data tags to be used for AWS resources created
+        by the AWSBatchStepOperator and the AWSStepfunctionsOrchestrator,
+        respectively.
+
+        Args:
+            info (StepRunInfo | None, optional): The StepRunInfo object passed
+            to the custom step operator's `launch` method. If provided, used to
+            generate step level tags for the step operator AWS resources.
+            placeholder_run (PipelineRunResponse | None, optional): The
+            PipelineRunResponse object passed to the custom orchestrator's
+            `submit_pipeline` method. Only used if no `info` argument is
+            provided.
+            step_name (str | None, optional): The name of the step. Defaults to
+             None. Only used if no `info` argument is
+            provided.
+
+        Returns:
+            dict[str, str]: A dictionary of zenml run meta data tags
+        """
         if info is not None:
             return {
                 AWSBatchTag.pipeline_name: info.pipeline.name,
@@ -414,7 +433,7 @@ class AWSBatchJobDefinition(BaseModel):
         job_name = f"{sanitized_pipeline_name}-{sanitized_step_name}"
         return f"{job_name}-{self.to_hash()}"
 
-    def to_hash(self) -> str:
+    def to_hash(self, max_length: int = 20) -> str:
         """Hashes the AWS Batch Job definition instance to help disambiguate
         them to avoid needlessly duplicating resources on the AWS side.
 
@@ -440,7 +459,7 @@ class AWSBatchJobDefinition(BaseModel):
         sorted_model_json = json.dumps(sorted_model_dict, sort_keys=True).encode()
         sorted_model_hash = hashlib.sha256(sorted_model_json).hexdigest()
 
-        return sorted_model_hash
+        return sorted_model_hash[:max_length]
 
     @model_serializer(mode="wrap")
     def sort_model(self, handler: SerializerFunctionWrapHandler):
@@ -574,7 +593,7 @@ def check_existing_batch_job_definition(
 
 def register_new_batch_job_definition(
     batch_client, batch_job_definition: AWSBatchJobDefinition
-):
+) -> tuple[str | None, str | None]:
     """Registers a new AWS Batch job definition.
 
     Args:
@@ -596,5 +615,7 @@ def register_new_batch_job_definition(
             f"ARN: {batch_job_definition_arn}. Revision: "
             f"{batch_job_definition_revision}."
         )
+        return batch_job_definition_arn, batch_job_definition_revision
     else:
         logger.error(f"Could not register new AWS Batch job definition: {response}")
+        return None, None

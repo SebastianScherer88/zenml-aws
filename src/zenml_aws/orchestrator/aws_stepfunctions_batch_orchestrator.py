@@ -19,7 +19,6 @@ from typing import (
 
 import boto3
 from boto3 import Session
-from pydantic import BaseModel, ConfigDict
 from zenml.config.base_settings import BaseSettings
 from zenml.enums import StackComponentType
 from zenml.logger import get_logger
@@ -44,6 +43,7 @@ from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
     AWSStepFunctionsOrchestratorConfig,
     AWSStepFunctionsOrchestratorSettings,
 )
+from zenml_aws.schema import AWSStepFunctionPipelineMetadata
 from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorSettings,
 )
@@ -52,82 +52,6 @@ logger = get_logger(__name__)
 
 ENV_ZENML_STEP_FUNCTIONS_RUN_ID = "ZENML_STEP_FUNCTIONS_RUN_ID"
 MAX_TASK_DEFINITION_VERSIONS = 50
-
-
-def prettify_alias(field_name: str) -> str:
-    # split on underscores, capitalize each word, join with spaces
-    return " ".join(word.capitalize() for word in field_name.split("_"))
-
-
-class AWSStepFunctionsOrchestratorStepMetadata(BaseModel):
-    step_name: str
-    step_job_definition_arn: str = "arn:aws:batch:eu-west-1:743582000746:job-definition/test_pipeline-report-3107f9b6e827dfea188b908889c4a6a798b8be4dc04a911f0e7bd8c17ddf3bd6:1"
-    step_job_definition_url: str = "https://eu-west-1.console.aws.amazon.com/batch/home?region=eu-west-1#job-definition/fargate/detail/arn:aws:batch:eu-west-1:743582000746:job-definition/test_pipeline-greet-1bad867ae8e979033581cc96d846613cf3c5701098062ff73b994c08812b5670:1"
-    step_job_arn: str = (
-        "arn:aws:batch:eu-west-1:743582000746:job/2a5c5eb6-ac54-48c0-bbe5-d0c0b1f025ce"
-    )
-    step_job_id: str = "2a5c5eb6-ac54-48c0-bbe5-d0c0b1f025ce"
-    step_job_url: str = "https://eu-west-1.console.aws.amazon.com/batch/home?region=eu-west-1#jobs/fargate/detail/2a5c5eb6-ac54-48c0-bbe5-d0c0b1f025ce"  # or 'ec2' instead of 'fargate'
-    step_job_logs_url: str = "https://eu-west-1.console.aws.amazon.com/cloudwatch/home?region=eu-west-1#logsV2:log-groups/log-group/%2Faws%2Fbatch%2Fjob/log-events/test_pipeline-report-3107f9b6e827dfea188b908889c4a6a798b8be4dc04a911f0e7bd8c17ddf3bd6%2Fdefault%2Fb8c540a286e0478297a81bfa923f4c65"
-
-    model_config = ConfigDict(
-        serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=False
-    )
-
-
-class AWSStepFunctionsOrchestratorPipelineMetadata(BaseModel):
-    state_machine_name: str = (
-        "test_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0"
-    )
-    state_machine_arn: str = "arn:aws:states:eu-west-1:743582000746:stateMachine:test_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0"
-    state_machine_url: str = "https://eu-west-1.console.aws.amazon.com/states/home?region=eu-west-1#/statemachines/view/arn%3Aaws%3Astates%3Aeu-west-1%3A743582000746%3AstateMachine%3Atest_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0?type=standard"
-    state_machine_execution_arn: str = "arn:aws:states:eu-west-1:743582000746:execution:test_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0:zenml-test_pipeline-1762619522"
-    state_machine_execution_url: str = "https://eu-west-1.console.aws.amazon.com/states/home?region=eu-west-1#/v2/executions/details/arn:aws:states:eu-west-1:743582000746:execution:test_pipeline-218cb8b3cd6d9f3882f37818295256a751022d22ca579e41791a0f801185dad0:zenml-test_pipeline-1762619522"
-
-    model_config = ConfigDict(
-        serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=False
-    )
-
-
-class AWSStepFunctionsOrchestratorRunMetadata(BaseModel):
-    orchestrator_logs_url: str
-    orchestrator_run_id: str
-    orchestrator_url: str
-    pipeline: AWSStepFunctionsOrchestratorPipelineMetadata
-    steps: dict[str, AWSStepFunctionsOrchestratorStepMetadata]
-    state_machine_arn: str
-    state_machine_execution_arn: str
-    step_job_definitions: dict[str, str]
-
-    @classmethod
-    def from_pipeline(
-        cls,
-        state_machine_arn: str,
-        state_machine_execution_arn: str,
-        step_job_definitions: dict[str, str],
-    ) -> "AWSStepFunctionsOrchestratorRunMetadata":
-        region = state_machine_execution_arn.split(":")[3]
-
-        return cls(
-            orchestrator_run_id=state_machine_execution_arn,
-            orchestrator_url=(
-                f"https://{region}.console.aws.amazon.com/states/home"
-                f"?region={region}#/executions/details/{state_machine_execution_arn}"
-            ),
-            orchestrator_logs_url=(
-                f"https://{region}.console.aws.amazon.com/cloudwatch/home"
-                f"?region={region}#logsV2:log-groups/log-group/$252Faws$252F"
-                "batch$252Fjob"
-            ),
-            state_machine_arn=state_machine_arn,
-            state_machine_execution_arn=state_machine_execution_arn,
-            step_job_definitions=step_job_definitions,
-            pipeline=AWSStepFunctionsOrchestratorPipelineMetadata(),
-            steps={
-                step_name: AWSStepFunctionsOrchestratorStepMetadata(step_name=step_name)
-                for step_name in step_job_definitions.keys()
-            },
-        )
 
 
 class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
@@ -292,7 +216,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         boto_session = self._get_aws_session()
         batch_client = boto_session.client("batch")
 
+        step_name_to_job_definition: dict[str, AWSBatchJobDefinition] = {}
         step_name_to_unique_job_definition_name: dict[str, str] = {}
+        step_name_to_arn_and_revision: dict[str, str] = {}
 
         for step_name, step in snapshot.step_configurations.items():
             step_environment = {
@@ -321,6 +247,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             step_name_to_unique_job_definition_name[step_name] = (
                 unique_batch_job_definition_name
             )
+            step_name_to_job_definition[step_name] = step_aws_batch_job_definition
 
             existing_job_definition = check_existing_batch_job_definition(
                 batch_client, unique_batch_job_definition_name
@@ -329,9 +256,15 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 logger.info(
                     f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
                 )
-                register_new_batch_job_definition(
+                (
+                    step_aws_batch_job_definition_arn,
+                    step_aws_batch_job_definition_revision,
+                ) = register_new_batch_job_definition(
                     batch_client,
                     step_aws_batch_job_definition,
+                )
+                step_name_to_arn_and_revision[step_name] = (
+                    f"{step_aws_batch_job_definition_arn}:{step_aws_batch_job_definition_revision}"
                 )
 
         # assemble and run as stepfunctions state machine
@@ -344,7 +277,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         ).encode()
         state_machine_definition_hash = hashlib.sha256(
             state_machine_definition_json
-        ).hexdigest()
+        ).hexdigest()[:20]
 
         # Create and execute state machine using helper functions
         stepfunction_client = boto_session.client("stepfunctions")
@@ -407,12 +340,22 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         else:
             wait_for_completion = None
 
+        step_meta_data = {
+            step_name: {
+                "job_backend": step_name_to_job_definition[step_name]
+                .platformCapabilities[0]
+                .lower(),
+                "job_definition_arn": step_name_to_arn_and_revision[step_name],
+            }
+            for step_name in step_name_to_job_definition
+        }
+
         return SubmissionResult(
             wait_for_completion=wait_for_completion,
-            metadata=AWSStepFunctionsOrchestratorRunMetadata.from_pipeline(
+            metadata=AWSStepFunctionPipelineMetadata.from_arns(
                 state_machine_arn=state_machine_arn,
                 state_machine_execution_arn=execution_arn,
-                step_job_definitions=step_name_to_unique_job_definition_name,
+                step_meta_data=step_meta_data,
             ).model_dump(),
         )
 
