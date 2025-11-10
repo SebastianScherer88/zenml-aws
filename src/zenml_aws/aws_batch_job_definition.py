@@ -7,7 +7,6 @@ import json
 import math
 from string import ascii_letters, digits
 from typing import Callable, Dict, List, Literal, cast
-from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -34,6 +33,7 @@ from zenml_aws.constants import (
 )
 from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
     AWSStepFunctionsOrchestratorConfig,
+    AWSStepFunctionsOrchestratorSettings,
 )
 from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorConfig,
@@ -71,6 +71,7 @@ class AWSBatchJobDefinitionContainerProperties(BaseModel):
         ResourceRequirement
     ] = []  # keys: 'value','type', with type one of 'GPU','VCPU','MEMORY'
     secrets: List[Dict[str, str]] = []  # keys: 'name','value'
+    logConfiguration: dict[str, str | dict] = {}
 
     @model_serializer(mode="wrap")
     def sort_model(self, handler, info):
@@ -93,20 +94,20 @@ class AWSBatchJobDefinitionContainerProperties(BaseModel):
 class AWSBatchJobDefinitionEC2ContainerProperties(
     AWSBatchJobDefinitionContainerProperties
 ):
-    logConfiguration: dict[
-        Literal["logDriver"],
-        Literal[
-            "awsfirelens",
-            "awslogs",
-            "fluentd",
-            "gelf",
-            "json-file",
-            "journald",
-            "logentries",
-            "syslog",
-            "splunk",
-        ],
-    ] = {"logDriver": "awslogs"}
+    # logConfiguration: dict[
+    #     Literal["logDriver"],
+    #     Literal[
+    #         "awsfirelens",
+    #         "awslogs",
+    #         "fluentd",
+    #         "gelf",
+    #         "json-file",
+    #         "journald",
+    #         "logentries",
+    #         "syslog",
+    #         "splunk",
+    #     ],
+    # ] = {"logDriver": "awslogs"}
 
     @field_validator("resourceRequirements")
     def check_resource_requirements(
@@ -141,9 +142,9 @@ class AWSBatchJobDefinitionEC2ContainerProperties(
 class AWSBatchJobDefinitionFargateContainerProperties(
     AWSBatchJobDefinitionContainerProperties
 ):
-    logConfiguration: dict[Literal["logDriver"], Literal["awslogs", "splunk"]] = {
-        "logDriver": "awslogs"
-    }
+    # logConfiguration: dict[Literal["logDriver"], Literal["awslogs", "splunk"]] = {
+    #     "logDriver": "awslogs"
+    # }
     networkConfiguration: dict[
         Literal["assignPublicIp"], Literal["ENABLED", "DISABLED"]
     ] = {"assignPublicIp": "ENABLED"}
@@ -235,7 +236,6 @@ class AWSBatchJobDefinition(BaseModel):
         cls,
         orchestrator: ContainerizedOrchestrator,  # | "AWSBatchOrchestrator",
         step: Step,
-        step_run_id: UUID,
         placeholder_run: PipelineRunResponse,
         environment: Dict[str, str],
         get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
@@ -272,35 +272,49 @@ class AWSBatchJobDefinition(BaseModel):
             )
         )
         pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
-        # we always apply the stepfunction orchestrator tags
+        pipeline_settings: AWSStepFunctionsOrchestratorSettings = (
+            orchestrator.get_settings(placeholder_run.snapshot)
+        )
+
+        # meta data tags
         tags: dict[str, str] = cls.generate_tags(
             placeholder_run=placeholder_run, step_name=step.config.name
         )
+        # we always apply the stepfunction orchestrator tags
+        tags.update(pipeline_settings.tags)
 
-        tags.update(pipeline_config.tags)
         if step_operator_settings is None:
-            applied_config = pipeline_config
-            timeout_seconds = applied_config.timeout_seconds_step
+            applied_settings = pipeline_settings
+            timeout_seconds = applied_settings.timeout_seconds_step
         else:
-            applied_config = step_operator_settings
-            timeout_seconds = applied_config.timeout_seconds
+            applied_settings = step_operator_settings
+            timeout_seconds = applied_settings.timeout_seconds
             # step operator tags will overwrite orchestrator tags for shared
             # keys
-            tags.update(applied_config.tags)
+            tags.update(applied_settings.tags)
 
-        container_kwargs = {}
+        container_kwargs = {
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": pipeline_config.batch_log_group,
+                    "awslogs-region": pipeline_config.region,
+                    "awslogs-stream-prefix": f"orchestrator/{placeholder_run.orchestrator_run_id}/",
+                },
+            }
+        }
 
-        if applied_config.backend == "EC2":
+        if applied_settings.backend == "EC2":
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
             AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
 
-        elif applied_config.backend == "FARGATE":
+        elif applied_settings.backend == "FARGATE":
             AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
             )
             container_kwargs["networkConfiguration"] = {
-                "assignPublicIp": applied_config.assign_public_ip
+                "assignPublicIp": applied_settings.assign_public_ip
             }
 
         return AWSBatchJobDefinitionClass(
@@ -340,7 +354,16 @@ class AWSBatchJobDefinition(BaseModel):
         tags = cls.generate_tags(info)
         tags.update(step_settings.tags)
 
-        container_kwargs = {}
+        container_kwargs = {
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": step_config.log_group,
+                    "awslogs-region": step_config.region,
+                    "awslogs-stream-prefix": f"step-operator/{info.step_run_id}",
+                },
+            }
+        }
 
         if step_settings.backend == "EC2":
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition

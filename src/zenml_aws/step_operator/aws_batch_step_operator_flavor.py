@@ -90,6 +90,9 @@ class AWSBatchStepOperatorConfig(BaseStepOperatorConfig, AWSBatchStepOperatorSet
         description="The IAM role arn of the ECS execution role."
     )
     job_role: str = Field(description="The IAM role arn of the ECS job role.")
+    log_group: str = Field(
+        description="The log group for Batch jobs.", default="/aws/batch/job/zenml-aws"
+    )
     aws_access_key_id: Optional[str] = SecretField(
         default=None,
         description="The AWS access key ID to use to authenticate to AWS. "
@@ -112,7 +115,7 @@ class AWSBatchStepOperatorConfig(BaseStepOperatorConfig, AWSBatchStepOperatorSet
         "authenticating to AWS.",
     )
     region: Optional[str] = Field(
-        None,
+        "eu-west-1",
         description="The AWS region where the processing job will be run. "
         "If not provided, the value from the default AWS config will be used.",
     )

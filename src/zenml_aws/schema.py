@@ -118,10 +118,10 @@ class AWSStepfunctionOrchestratorMetaData(BaseModel):
         ],
     ) -> "AWSStepfunctionOrchestratorMetaData":
         return cls(
-            pipeline=AWSStepFunctionPipelineMetadata.from_arns(
+            aws_stepfunctions=AWSStepFunctionPipelineMetadata.from_arns(
                 state_machine_arn, state_machine_execution_arn
             ),
-            steps={
+            aws_batch={
                 step_name: AWSBatchStepStepMetadata.from_arns(
                     **step_meta_data[step_name]
                 )

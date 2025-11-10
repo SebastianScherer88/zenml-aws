@@ -230,7 +230,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             step_aws_batch_job_definition = AWSBatchJobDefinition.from_orchestrator(
                 orchestrator=self,
                 step=step,
-                step_run_id="test",
                 placeholder_run=placeholder_run,
                 environment=step_environment,
                 get_image_fn=self.get_image,
@@ -424,17 +423,32 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             The ARN of the created state machine
         """
 
+        pipeline_settings: AWSStepFunctionsOrchestratorSettings = self.get_settings(
+            placeholder_run.snapshot
+        )
+
         tags = [
             {"key": AWSBatchTag.pipeline_name, "value": placeholder_run.pipeline.name},
             {"key": AWSBatchTag.pipeline_run_id, "value": str(placeholder_run.id)},
             {"key": AWSBatchTag.pipeline_run_name, "value": placeholder_run.name},
         ]
-        tags.extend(self.map_tags(self.config.tags))
+        tags.extend(self.map_tags(pipeline_settings.tags))
 
         response = stepfunction_client.create_state_machine(
             name=name,
             definition=json.dumps(definition),
             roleArn=self.config.stepfunctions_execution_role,
+            loggingConfiguration={
+                "level": "ALL",
+                "includeExecutionData": False,
+                "destinations": [
+                    {
+                        "cloudWatchLogsLogGroup": {
+                            "logGroupArn": self.config.stepfunctions_log_group_arn
+                        }
+                    }
+                ],
+            },
             type="STANDARD",
             tags=tags,
         )

@@ -94,7 +94,14 @@ class AWSStepFunctionsOrchestratorConfig(
     stepfunctions_execution_role: str = Field(
         description="The IAM role arn of the Stepfunctions execution role."
     )
-
+    stepfunctions_log_group_arn: str = Field(
+        description="The ARN of the log "
+        "group for Stepfunctions executions. Must already exist.",
+        default="/aws/zenml/stepfunctions",
+    )
+    batch_log_group: str = Field(
+        description="The log group for Batch jobs. Will", default="/aws/zenml/batch"
+    )
     batch_execution_role: str = Field(
         description="The IAM role arn of the ECS execution role."
     )
@@ -122,7 +129,7 @@ class AWSStepFunctionsOrchestratorConfig(
         "authenticating to AWS.",
     )
     region: Optional[str] = Field(
-        None,
+        "eu-west-1",
         description="The AWS region where the processing job will be run. "
         "If not provided, the value from the default AWS config will be used.",
     )
