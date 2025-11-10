@@ -186,7 +186,7 @@ class AWSBatchStepOperatorFlavor(BaseStepOperatorFlavor):
         Returns:
             The flavor logo.
         """
-        return "https://public-flavor-logos.s3.eu-central-1.amazonaws.com/step_operator/aws_batch.png"
+        return "https://zenml-aws-public.s3.eu-west-1.amazonaws.com/aws-batch-logo.png"
 
     @property
     def config_class(self) -> Type[AWSBatchStepOperatorConfig]:

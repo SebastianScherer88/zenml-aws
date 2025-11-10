@@ -8,6 +8,8 @@ Contains:
 - a customized version of [the AWS Batch step operator proposed in this PR in the official zenml repository](https://github.com/zenml-io/zenml/pull/3954) (based on [this original plugin implementation](https://github.com/zenml-io/zenml-plugins/blob/41f9f9bc91e4fa25cf90068bc2db8a8a721b5986/step_operator_batch/step_operator/aws_batch_step_operator.py#L47))
 - a placeholder for a future AWS Batch EC2 (and thus GPU) compatible extension of [the great ML Ops Club's step functions orchestrator implementation](https://github.com/mlops-club/zenml-aws-stepfunctions-orchestrator/blob/a9179570d03d44b674031699ac9bbe943bc25fa8/sfn-orchestrator/src/sfn_orchestrator/sfn_orchestrator.py#L175)
 
+![The remote components](image/aws-components.png)
+
 # Setup
 
 
@@ -113,6 +115,8 @@ zenml stack register test-step-operator -a default -o default -c aws-ecr -s aws-
 zenml stack set test-step-operator
 ```
 
+![AWS Step operator component](image/step-operator-component.png)
+
 For end-to-end tests running on the provisioned AWS infrastructure, run the 
 test scripts in the `scripts` directory:
 
@@ -140,6 +144,8 @@ zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctio
 zenml stack register test-orchestrator -a default -o aws-stepfunctions -c aws-ecr -a aws-s3 -s aws-batch
 zenml stack set test-orchestrator
 ```
+
+![AWS Stepfunctions component](image/stepfunctions-component.png)
 
 For end-to-end tests running on the provisioned AWS infrastructure, run the 
 test scripts in the `scripts` directory:
