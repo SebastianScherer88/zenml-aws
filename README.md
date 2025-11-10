@@ -88,30 +88,6 @@ Register the git repository as a local zenml repository:
 zenml init
 ```
 
-Register the AWS Batch step operator flavour:
-
-```bash
-zenml step-operator flavor register src.zenml_aws.step_operator.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
-```
-
-Register the step operator component:
-
-```bash
-zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/batch-execution-role --job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags='{"test":"step-operator"}' --assign_public_ip=false --timeout_seconds=900 --aws_profile=pulumi
-```
-
-Register the AWS Batch orchestrator flavour:
-
-```bash
-zenml orchestrator flavor register zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
-```
-
-Register the orchestrator component:
-
-```bash
-zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=fake-role-arn --batch_execution_role=arn:aws:iam::743582000746:role/batch-execution-role --batch_job_role=arn:aws:iam::743582000746:role/batch-job-role --job_queue_name=zenml-test-fargate-job-queue --backend=FARGATE --tags='{"test":"orchestrator"}' --assign_public_ip=false --timeout_seconds=900 --aws_profile=pulumi
-```
-
 Register a remote type ECR contaier registry component:
 
 ```bash
@@ -122,18 +98,6 @@ Register a remote type S3 artifact store component:
 
 ```bash
 zenml artifact-store register aws-s3 -f s3 --path=s3://zenml-artifact-store-29182ff
-```
-
-Register a `zenml-aws-test` zenml stack with the components:
-
-```bash
-zenml stack register aws-test -a aws-s3 -o default -s aws-batch -c aws-ecr
-```
-
-Set the new stack as the active one:
-
-```bash
-zenml stack set aws-test
 ```
 
 ### Batch Step Operator
@@ -148,6 +112,17 @@ zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam
 zenml stack register test-step-operator -a default -o default -c aws-ecr -s aws-batch -a aws-s3
 zenml stack set test-step-operator
 ```
+
+For end-to-end tests running on the provisioned AWS infrastructure, run the 
+test scripts in the `scripts` directory:
+
+```bash
+zenml stack set test-step-operator
+python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-test-ec2-job-queue --memory 1000
+python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2048
+```
+
+![A pipeline using the AWS Batch step operator](image/batch-step-operator-step.png)
 
 ### Stepfunctions Orchestrator
 
@@ -166,6 +141,17 @@ zenml stack register test-orchestrator -a default -o aws-stepfunctions -c aws-ec
 zenml stack set test-orchestrator
 ```
 
+For end-to-end tests running on the provisioned AWS infrastructure, run the 
+test scripts in the `scripts` directory:
+
+```bash
+zenml stack set test-orchestrator
+python scripts/test_run_orchestrator.py --backend EC2 --job-queue zenml-test-ec2-job-queue --memory 1000
+python scripts/test_run_orchestrator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2048
+```
+
+![A pipeline using the AWS Stepfunctions orchestrator](image/stepfunctions-orchestrator-pipeline.png)
+
 ## Zenml dashboard (optional)
 
 It can be useful to track the state of stacks and pipelines via the zenml
@@ -176,9 +162,9 @@ cd infrastructure
 docker compose up
 ```
 
-The username is "default", and the password is empty.
+The username is `default`, and the password is empty.
 
-# Tests
+## Tests
 
 For local only unit and integration tests, simply run the pytest test suites
 in the respective directories:
@@ -188,21 +174,4 @@ pytest tests/unit -vv # unit tests
 pytest tests/integration -vv # integration tests
 ```
 
-## Step operator
-
-For end-to-end tests running on the provisioned AWS infrastructure, run the 
-test scripts in the `scripts` directory:
-
-```bash
-zenml stack set test-step-operator
-python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-test-ec2-job-queue --memory 1000
-python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2048
-```
-
-## Orchestrator
-
-```bash
-zenml stack set test-orchestrator
-python scripts/test_run_orchestrator.py --backend EC2 --job-queue zenml-test-ec2-job-queue --memory 1000
-python scripts/test_run_orchestrator.py --backend FARGATE --job-queue zenml-test-fargate-job-queue --memory 2048
-```
+For end-to-end tests, see the sections above.
