@@ -20,14 +20,8 @@ from typing import (
 import boto3
 from boto3 import Session
 from zenml.config.base_settings import BaseSettings
-from zenml.constants import (
-    METADATA_ORCHESTRATOR_LOGS_URL,
-    METADATA_ORCHESTRATOR_RUN_ID,
-    METADATA_ORCHESTRATOR_URL,
-)
 from zenml.enums import StackComponentType
 from zenml.logger import get_logger
-from zenml.metadata.metadata_types import MetadataType
 from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
 from zenml.orchestrators import ContainerizedOrchestrator, SubmissionResult
 from zenml.stack import Stack, StackValidator
@@ -40,6 +34,7 @@ from zenml_aws.aws_batch_job_definition import (
 )
 from zenml_aws.constants import (
     AWS_BATCH_STEP_OPERATOR_FLAVOR,
+    AWSBatchTag,
     AWSStateMachineExecutionStatus,
 )
 
@@ -48,6 +43,7 @@ from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
     AWSStepFunctionsOrchestratorConfig,
     AWSStepFunctionsOrchestratorSettings,
 )
+from zenml_aws.schema import AWSStepfunctionOrchestratorMetaData
 from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorSettings,
 )
@@ -220,19 +216,21 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         boto_session = self._get_aws_session()
         batch_client = boto_session.client("batch")
 
+        step_name_to_job_definition: dict[str, AWSBatchJobDefinition] = {}
         step_name_to_unique_job_definition_name: dict[str, str] = {}
+        step_name_to_arn_and_revision: dict[str, str] = {}
 
         for step_name, step in snapshot.step_configurations.items():
             step_environment = {
                 **snapshot.pipeline_configuration.environment,
                 **step_environments[step_name],
-                ENV_ZENML_STEP_FUNCTIONS_RUN_ID: str(snapshot.id),
+                ENV_ZENML_STEP_FUNCTIONS_RUN_ID: str(placeholder_run.id),
             }
 
             step_aws_batch_job_definition = AWSBatchJobDefinition.from_orchestrator(
                 orchestrator=self,
                 step=step,
-                snapshot=snapshot,
+                placeholder_run=placeholder_run,
                 environment=step_environment,
                 get_image_fn=self.get_image,
             )
@@ -248,6 +246,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             step_name_to_unique_job_definition_name[step_name] = (
                 unique_batch_job_definition_name
             )
+            step_name_to_job_definition[step_name] = step_aws_batch_job_definition
 
             existing_job_definition = check_existing_batch_job_definition(
                 batch_client, unique_batch_job_definition_name
@@ -256,9 +255,11 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 logger.info(
                     f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
                 )
-                register_new_batch_job_definition(
-                    batch_client,
-                    step_aws_batch_job_definition,
+                step_name_to_arn_and_revision[step_name] = (
+                    register_new_batch_job_definition(
+                        batch_client,
+                        step_aws_batch_job_definition,
+                    )
                 )
 
         # assemble and run as stepfunctions state machine
@@ -271,11 +272,12 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         ).encode()
         state_machine_definition_hash = hashlib.sha256(
             state_machine_definition_json
-        ).hexdigest()
+        ).hexdigest()[:20]
 
         # Create and execute state machine using helper functions
         stepfunction_client = boto_session.client("stepfunctions")
         state_machine_arn = self.create_state_machine_from_definition(
+            placeholder_run=placeholder_run,
             stepfunction_client=stepfunction_client,
             name=f"{sanitize_name(snapshot.pipeline.name,30)}-{state_machine_definition_hash}",
             definition=state_machine_definition,
@@ -296,38 +298,62 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                         executionArn=execution_arn
                     )
                     status: AWSStateMachineExecutionStatus = response["status"]
+                    logger.info(
+                        f"Status of state machine execution {execution_arn}: [{status}] @{now}."
+                    )
 
                     if status == AWSStateMachineExecutionStatus.running:
-                        logger.info(
-                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} is running @{now}."
-                        )
-                    elif status == AWSStateMachineExecutionStatus.succeeded:
-                        logger.info(
-                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} completed successfully @{now}."
-                        )
-                        break
+                        time.sleep(self.config.poll_interval_seconds)
                     elif status in (
+                        AWSStateMachineExecutionStatus.succeeded,
                         AWSStateMachineExecutionStatus.failed,
                         AWSStateMachineExecutionStatus.aborted,
                         AWSStateMachineExecutionStatus.timed_out,
                     ):
-                        raise RuntimeError(
-                            f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} failed with status {status} @{now}"
+                        break
+
+                if status in self.config.delete_stepfunctions_resource_on:
+                    # clean up state machine
+                    try:
+                        stepfunction_client.delete_state_machine(
+                            stateMachineArn=state_machine_arn
+                        )
+                        logger.info(
+                            f"Successfully deleted state machine {state_machine_arn} @ {now}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to delete state machine {state_machine_arn}: {e}"
                         )
 
-                    time.sleep(self.config.poll_interval_seconds)
+                if status in (
+                    AWSStateMachineExecutionStatus.failed,
+                    AWSStateMachineExecutionStatus.aborted,
+                    AWSStateMachineExecutionStatus.timed_out,
+                ):
+                    raise RuntimeError(
+                        f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} failed: [{status}]: {response} @{now}"
+                    )
         else:
             wait_for_completion = None
 
-        # Generate metadata using the standalone function
-        try:
-            stepfunction_client.delete_state_machine(stateMachineArn=state_machine_arn)
-        except Exception as e:
-            logger.warning(f"Failed to delete state machine: {e}")
+        step_meta_data = {
+            step_name: {
+                "job_backend": step_name_to_job_definition[step_name]
+                .platformCapabilities[0]
+                .lower(),
+                "job_definition_arn": step_name_to_arn_and_revision[step_name],
+            }
+            for step_name in step_name_to_job_definition
+        }
 
         return SubmissionResult(
             wait_for_completion=wait_for_completion,
-            metadata=generate_step_functions_metadata(execution_arn),
+            metadata=AWSStepfunctionOrchestratorMetaData.from_arns(
+                state_machine_arn=state_machine_arn,
+                state_machine_execution_arn=execution_arn,
+                step_meta_data=step_meta_data,
+            ).model_dump(),
         )
 
     @staticmethod
@@ -380,6 +406,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
     def create_state_machine_from_definition(
         self,
+        placeholder_run: PipelineRunResponse,
         stepfunction_client: boto3.client,
         name: str,
         definition: Dict[str, Any],
@@ -395,13 +422,37 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         Returns:
             The ARN of the created state machine
         """
+
+        pipeline_settings: AWSStepFunctionsOrchestratorSettings = self.get_settings(
+            placeholder_run.snapshot
+        )
+
+        tags = [
+            {"key": AWSBatchTag.pipeline_name, "value": placeholder_run.pipeline.name},
+            {"key": AWSBatchTag.pipeline_run_id, "value": str(placeholder_run.id)},
+            {"key": AWSBatchTag.pipeline_run_name, "value": placeholder_run.name},
+        ]
+        tags.extend(self.map_tags(pipeline_settings.tags))
+
         response = stepfunction_client.create_state_machine(
             name=name,
             definition=json.dumps(definition),
             roleArn=self.config.stepfunctions_execution_role,
+            loggingConfiguration={
+                "level": "ALL",
+                "includeExecutionData": False,
+                "destinations": [
+                    {
+                        "cloudWatchLogsLogGroup": {
+                            "logGroupArn": self.config.stepfunctions_log_group_arn
+                        }
+                    }
+                ],
+            },
             type="STANDARD",
-            tags=self.map_tags(self.config.tags),
+            tags=tags,
         )
+
         try:
             state_machine_arn = response["stateMachineArn"]
             logger.info(
@@ -528,20 +579,3 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         }
 
         return definition
-
-
-def generate_step_functions_metadata(
-    execution_arn: str,
-) -> Dict[str, MetadataType]:
-    region = execution_arn.split(":")[3]
-    return {
-        METADATA_ORCHESTRATOR_RUN_ID: execution_arn,
-        METADATA_ORCHESTRATOR_URL: (
-            f"https://{region}.console.aws.amazon.com/states/home"
-            f"?region={region}#/executions/details/{execution_arn}"
-        ),
-        METADATA_ORCHESTRATOR_LOGS_URL: (
-            f"https://{region}.console.aws.amazon.com/cloudwatch/home"
-            f"?region={region}#logsV2:log-groups/log-group/$252Faws$252Fbatch$252Fjob"
-        ),
-    }

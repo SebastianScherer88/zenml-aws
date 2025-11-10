@@ -62,8 +62,7 @@ def main(backend: str, cpu: str, memory: str, job_queue: str):
         "greet": {
             "settings": {
                 "step_operator": AWSBatchStepOperatorSettings(
-                    job_queue_name=job_queue,
-                    backend=backend,
+                    job_queue_name=job_queue, backend=backend, tags={"test-d": "D"}
                 ).model_dump(),
             },
         },
@@ -77,7 +76,7 @@ def main(backend: str, cpu: str, memory: str, job_queue: str):
                     backend=backend,
                 ).model_dump(),
             },
-            "environment": {"test-d": "D"},
+            "environment": {"test-e": "E"},
         },
     }
     test_pipeline.with_options(

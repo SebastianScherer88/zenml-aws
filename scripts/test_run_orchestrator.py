@@ -48,21 +48,17 @@ def test_pipeline(name: str):
 def main(backend: str, cpu: str, memory: str, job_queue: str):
     click.echo(f"{backend}, {cpu}, {memory}, {job_queue}")
 
-    pipeline_settings = settings = {
+    pipeline_settings = {
         "resources": ResourceSettings(
             cpu_count=cpu, memory=f"{memory}MiB"
         ).model_dump(),
-        "orchestrator": AWSStepFunctionsOrchestratorSettings(tags={"test-a": "A"}),
+        "orchestrator": AWSStepFunctionsOrchestratorSettings(tags={"test-d": "D"}),
     }
     pipeline_environment = {
         "ZENML_STORE_USERNAME": "zenml",
         "ZENML_STORE_PASSWORD": "password",
     }
-    test_pipeline.configure(
-        settings=pipeline_settings, environment=pipeline_environment
-    )
-
-    step_configurations = {
+    pipeline_step_configurations = {
         "greet": {
             "settings": {
                 "step_operator": AWSBatchStepOperatorSettings(
@@ -70,23 +66,33 @@ def main(backend: str, cpu: str, memory: str, job_queue: str):
                     backend=backend,
                 ).model_dump(),
             },
+            "extra": {"test-e": "E"},
+            "environment": {"test-f": "F"},
         },
         "report": {
             "settings": {
                 "resources": ResourceSettings(
                     cpu_count=2 * cpu, memory=f"{2*memory}MiB"
                 ),
-                "step_operator": AWSBatchStepOperatorSettings(
+                "step_operator.aws_batch": AWSBatchStepOperatorSettings(
                     job_queue_name=job_queue,
                     backend=backend,
                 ).model_dump(),
             },
-            "environment": {"test-d": "D"},
         },
     }
-    test_pipeline.with_options(
-        settings=settings, step_configurations=step_configurations, enable_cache=False
-    )("Sebastian")
+
+    test_pipeline.configure(
+        settings=pipeline_settings,
+        environment=pipeline_environment,
+        enable_artifact_metadata=True,
+        enable_cache=False,
+        extra={"test-g": "G"},
+    )
+
+    test_pipeline.with_options(step_configurations=pipeline_step_configurations)(
+        "Sebastian"
+    )
 
 
 if __name__ == "__main__":

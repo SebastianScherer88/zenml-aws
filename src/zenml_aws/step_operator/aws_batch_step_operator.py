@@ -25,7 +25,7 @@ from typing import (
 )
 
 from boto3 import Session
-from botocore.exceptions import ClientError
+from zenml import log_metadata
 from zenml.config.base_settings import BaseSettings
 from zenml.config.build_configuration import BuildConfiguration
 from zenml.config.step_run_info import StepRunInfo
@@ -45,6 +45,7 @@ from zenml_aws.constants import (
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchJobStatus,
 )
+from zenml_aws.schema import AWSBatchStepStepMetadata
 from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorConfig,
     AWSBatchStepOperatorSettings,
@@ -196,8 +197,7 @@ class AWSBatchStepOperator(BaseStepOperator):
         batch_client,
         job_definition_name: str,
         info: StepRunInfo,
-        wait: bool = True,
-    ):
+    ) -> tuple[str, str]:
         """Submits the AWS Batch job that implements this zenml pipeline step.
 
         Args:
@@ -224,35 +224,45 @@ class AWSBatchStepOperator(BaseStepOperator):
         )
 
         job_id = response["jobId"]
+        job_arn = response["jobArn"]
+        return job_id, job_arn
 
-        while wait:
-            try:
-                now = datetime.now()
-                response = batch_client.describe_jobs(jobs=[job_id])
-                status: AWSBatchJobStatus = response["jobs"][0]["status"]
-                status_reason = response["jobs"][0].get("statusReason", "Unknown")
+    def await_job(self, batch_client, job_id: str, job_definition_arn: str):
+        while True:
+            now = datetime.now()
+            response = batch_client.describe_jobs(jobs=[job_id])
+            status: AWSBatchJobStatus = response["jobs"][0]["status"]
+            status_reason = response["jobs"][0].get("statusReason", "Unknown")
 
-                if status == AWSBatchJobStatus.submitted:
-                    logger.info(f"Job {job_id} submitted successfully @{now}.")
-                elif status in (AWSBatchJobStatus.runnable, AWSBatchJobStatus.pending):
-                    logger.info(
-                        f"Job {job_id} is {status.lower()} and waiting for execution @{now}."
-                    )
-                elif status in (AWSBatchJobStatus.starting, AWSBatchJobStatus.running):
-                    logger.info(f"Job {job_id} is {status.lower()} @{now}.")
-                elif status == AWSBatchJobStatus.succeeded:
-                    logger.info(f"Job {job_id} completed successfully @{now}.")
-                    break
-                elif status == AWSBatchJobStatus.failed:
-                    raise RuntimeError(
-                        f"Job {job_id} failed with status reason "
-                        f"{status_reason} @{now}"
-                    )
+            logger.info(f"Status of batch job {job_id}: [{status}] @{now}.")
+
+            if status in (
+                AWSBatchJobStatus.submitted,
+                AWSBatchJobStatus.runnable,
+                AWSBatchJobStatus.pending,
+                AWSBatchJobStatus.starting,
+                AWSBatchJobStatus.running,
+            ):
                 time.sleep(self.config.poll_interval_seconds)
-            except ClientError as e:
-                now = datetime.now()
-                logger.error(f"Failed to describe job {job_id}: {e} @{now}")
-                raise
+            elif status in (AWSBatchJobStatus.succeeded, AWSBatchJobStatus.failed):
+                break
+
+        if status in self.config.delete_resources_on:
+            # clean up job description
+            try:
+                batch_client.deregister_job_definition(jobDefinition=job_definition_arn)
+                logger.info(
+                    f"Successfully deleted job definition {job_definition_arn} @ {now}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to delete job definition {job_definition_arn}: {e}"
+                )
+
+        if status == AWSBatchJobStatus.failed:
+            raise RuntimeError(
+                f"Job {job_id} failed with status reason {status_reason} @{now}"
+            )
 
     def launch(
         self,
@@ -293,17 +303,37 @@ class AWSBatchStepOperator(BaseStepOperator):
         batch_client = boto_session.client("batch")
 
         # check if this job definition already exists
-        existing_job_definition = check_existing_batch_job_definition(
+        job_definition_arn = check_existing_batch_job_definition(
             batch_client, batch_job_definition.jobDefinitionName
         )
 
         # register new job definition if necessary
-        if not existing_job_definition:
+        if job_definition_arn is None:
             logger.info(
                 f"AWS Batch job definition {unique_batch_job_definition_name} doesnt exist yet. Registering..."
             )
 
-            register_new_batch_job_definition(batch_client, batch_job_definition)
+            job_definition_arn = register_new_batch_job_definition(
+                batch_client, batch_job_definition
+            )
 
         # submit AWS Batch job
-        self.submit_job(batch_client, unique_batch_job_definition_name, info)
+        job_id, job_arn = self.submit_job(
+            batch_client, unique_batch_job_definition_name, info
+        )
+
+        # update step metadata
+        log_metadata(
+            step_name=info.pipeline_step_name,
+            run_id_name_or_prefix=info.run_id,
+            metadata={
+                "AWS Batch": AWSBatchStepStepMetadata.from_arns(
+                    job_definition_arn,
+                    self.config.backend.lower(),
+                    job_arn,
+                ).model_dump(),
+            },
+        )
+
+        # await job outcome
+        self.await_job(batch_client, job_id, job_definition_arn)
