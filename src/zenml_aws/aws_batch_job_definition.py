@@ -27,7 +27,6 @@ from zenml.step_operators import BaseStepOperator
 
 from zenml_aws.constants import (
     AWS_BATCH_JOB_DEFAULT_NAME,
-    AWS_BATCH_STEP_OPERATOR_FLAVOR,
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchTag,
 )
@@ -266,16 +265,13 @@ class AWSBatchJobDefinition(BaseModel):
         # NOTE: This means that for step level AWS Batch configurations, a
         # registered aws_batch flavour step_operator component is required in
         # the stack and the pipeline.
-        step_operator_settings: AWSBatchStepOperatorSettings | None = (
-            step.config.settings.get(
-                f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
-            )
-        )
         pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
+        step_settings: (
+            AWSBatchStepOperatorSettings | AWSStepFunctionsOrchestratorSettings
+        ) = orchestrator.get_step_settings(step.config.name, placeholder_run.snapshot)
         pipeline_settings: AWSStepFunctionsOrchestratorSettings = (
             orchestrator.get_settings(placeholder_run.snapshot)
         )
-
         # meta data tags
         tags: dict[str, str] = cls.generate_tags(
             placeholder_run=placeholder_run, step_name=step.config.name
@@ -283,15 +279,13 @@ class AWSBatchJobDefinition(BaseModel):
         # we always apply the stepfunction orchestrator tags
         tags.update(pipeline_settings.tags)
 
-        if step_operator_settings is None:
-            applied_settings = pipeline_settings
-            timeout_seconds = applied_settings.timeout_seconds_step
-        else:
-            applied_settings = step_operator_settings
-            timeout_seconds = applied_settings.timeout_seconds
+        if isinstance(step_settings, AWSStepFunctionsOrchestratorSettings):
+            timeout_seconds = step_settings.timeout_seconds_step
+        elif isinstance(step_settings, AWSBatchStepOperatorSettings):
+            timeout_seconds = step_settings.timeout_seconds
             # step operator tags will overwrite orchestrator tags for shared
             # keys
-            tags.update(applied_settings.tags)
+            tags.update(step_settings.tags)
 
         container_kwargs = {
             "logConfiguration": {
@@ -304,17 +298,17 @@ class AWSBatchJobDefinition(BaseModel):
             }
         }
 
-        if applied_settings.backend == "EC2":
+        if step_settings.backend == "EC2":
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
             AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
 
-        elif applied_settings.backend == "FARGATE":
+        elif step_settings.backend == "FARGATE":
             AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
             )
             container_kwargs["networkConfiguration"] = {
-                "assignPublicIp": applied_settings.assign_public_ip
+                "assignPublicIp": step_settings.assign_public_ip
             }
 
         return AWSBatchJobDefinitionClass(

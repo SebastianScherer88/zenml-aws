@@ -322,6 +322,8 @@ class AWSBatchStepOperator(BaseStepOperator):
             batch_client, unique_batch_job_definition_name, info
         )
 
+        step_settings: AWSBatchStepOperatorSettings = self.get_settings(info)
+
         # update step metadata
         log_metadata(
             step_name=info.pipeline_step_name,
@@ -329,7 +331,8 @@ class AWSBatchStepOperator(BaseStepOperator):
             metadata={
                 "AWS Batch": AWSBatchStepStepMetadata.from_arns(
                     job_definition_arn,
-                    self.config.backend.lower(),
+                    step_settings.backend.lower(),
+                    step_settings.job_queue_name,
                     job_arn,
                 ).model_dump(),
             },

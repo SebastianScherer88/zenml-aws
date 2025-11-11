@@ -1,5 +1,7 @@
 from enum import StrEnum
 
+from zenml.enums import ExecutionStatus
+
 AWS_BATCH_STEP_OPERATOR_FLAVOR = "aws_batch"
 AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR = "aws_stepfunctions"
 DEFAULT_STATE_MACHINE_TYPE = "STANDARD"
@@ -34,9 +36,31 @@ class AWSBatchJobStatus(StrEnum):
     failed: str = "FAILED"
 
 
+BATCH_JOB_TO_ZENML_EXECUTION_STATUS: dict[AWSBatchJobStatus, ExecutionStatus] = {
+    AWSBatchJobStatus.submitted: ExecutionStatus.PROVISIONING,
+    AWSBatchJobStatus.pending: ExecutionStatus.PROVISIONING,
+    AWSBatchJobStatus.runnable: ExecutionStatus.PROVISIONING,
+    AWSBatchJobStatus.starting: ExecutionStatus.INITIALIZING,
+    AWSBatchJobStatus.running: ExecutionStatus.RUNNING,
+    AWSBatchJobStatus.succeeded: ExecutionStatus.COMPLETED,
+    AWSBatchJobStatus.failed: ExecutionStatus.FAILED,
+}
+
+
 class AWSStateMachineExecutionStatus(StrEnum):
     running: str = "RUNNING"
     succeeded: str = "SUCCEEDED"
     failed: str = "FAILED"
     timed_out: str = "TIMED_OUT"
     aborted: str = "ABORTED"
+
+
+STATE_MACHINE_EXECUTION_TO_ZENML_EXECUTION_STATUS: dict[
+    AWSStateMachineExecutionStatus, ExecutionStatus
+] = {
+    AWSStateMachineExecutionStatus.running: ExecutionStatus.RUNNING,
+    AWSStateMachineExecutionStatus.succeeded: ExecutionStatus.COMPLETED,
+    AWSStateMachineExecutionStatus.failed: ExecutionStatus.FAILED,
+    AWSStateMachineExecutionStatus.timed_out: ExecutionStatus.STOPPED,
+    AWSStateMachineExecutionStatus.aborted: ExecutionStatus.STOPPED,
+}
