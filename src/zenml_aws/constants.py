@@ -9,10 +9,12 @@ DEFAULT_STATE_MACHINE_TYPE = "STANDARD"
 BATCH_DOCKER_IMAGE_KEY = "aws_batch_step_operator"
 _ENTRYPOINT_ENV_VARIABLE = "__ZENML_ENTRYPOINT"
 
-AWS_BATCH_JOB_DEFAULT_NAME = "zenml-aws-batch-job-definition"
+ENV_ZENML_STEP_FUNCTIONS_RUN_ID = "AWS_STEPFUNCTIONS_RUN_ID"
 
 
 class AWSBatchTag(StrEnum):
+    orchestrator_run_id: str = ENV_ZENML_STEP_FUNCTIONS_RUN_ID
+
     pipeline_name: str = "ZENML_AWS_BATCH_PIPELINE_NAME"
     pipeline_run_id: str = "ZENML_AWS_BATCH_PIPELINE_RUN_ID"
     pipeline_run_name: str = "ZENML_AWS_BATCH_PIPELINE_RUN_NAME"

@@ -19,6 +19,7 @@ from pydantic import (
 from zenml.config import ResourceSettings
 from zenml.config.step_configurations import Step
 from zenml.config.step_run_info import StepRunInfo
+from zenml.constants import METADATA_ORCHESTRATOR_RUN_ID
 from zenml.entrypoints import StepEntrypointConfiguration
 from zenml.logger import get_logger
 from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
@@ -26,17 +27,16 @@ from zenml.orchestrators import ContainerizedOrchestrator
 from zenml.step_operators import BaseStepOperator
 
 from zenml_aws.constants import (
-    AWS_BATCH_JOB_DEFAULT_NAME,
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchTag,
 )
-from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
-    AWSStepFunctionsOrchestratorConfig,
-    AWSStepFunctionsOrchestratorSettings,
-)
-from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+from zenml_aws.flavors.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorConfig,
     AWSBatchStepOperatorSettings,
+)
+from zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor import (
+    AWSStepFunctionsOrchestratorConfig,
+    AWSStepFunctionsOrchestratorSettings,
 )
 
 logger = get_logger(__name__)
@@ -93,21 +93,6 @@ class AWSBatchJobDefinitionContainerProperties(BaseModel):
 class AWSBatchJobDefinitionEC2ContainerProperties(
     AWSBatchJobDefinitionContainerProperties
 ):
-    # logConfiguration: dict[
-    #     Literal["logDriver"],
-    #     Literal[
-    #         "awsfirelens",
-    #         "awslogs",
-    #         "fluentd",
-    #         "gelf",
-    #         "json-file",
-    #         "journald",
-    #         "logentries",
-    #         "syslog",
-    #         "splunk",
-    #     ],
-    # ] = {"logDriver": "awslogs"}
-
     @field_validator("resourceRequirements")
     def check_resource_requirements(
         cls, resource_requirements: List[ResourceRequirement]
@@ -212,7 +197,7 @@ class AWSBatchJobDefinition(BaseModel):
     """A utility to validate AWS Batch job descriptions. Base class
     for container and multinode job definition types."""
 
-    jobDefinitionName: str = AWS_BATCH_JOB_DEFAULT_NAME
+    jobDefinitionName: str = ""
     type: str = "container"
     containerProperties: (
         AWSBatchJobDefinitionEC2ContainerProperties
@@ -234,6 +219,7 @@ class AWSBatchJobDefinition(BaseModel):
     def from_orchestrator(
         cls,
         orchestrator: ContainerizedOrchestrator,  # | "AWSBatchOrchestrator",
+        orchestrator_run_id: str,
         step: Step,
         placeholder_run: PipelineRunResponse,
         environment: Dict[str, str],
@@ -281,11 +267,13 @@ class AWSBatchJobDefinition(BaseModel):
 
         if isinstance(step_settings, AWSStepFunctionsOrchestratorSettings):
             timeout_seconds = step_settings.timeout_seconds_step
-        elif isinstance(step_settings, AWSBatchStepOperatorSettings):
+        else:
             timeout_seconds = step_settings.timeout_seconds
             # step operator tags will overwrite orchestrator tags for shared
             # keys
             tags.update(step_settings.tags)
+
+        tags.update({METADATA_ORCHESTRATOR_RUN_ID: orchestrator_run_id})
 
         container_kwargs = {
             "logConfiguration": {

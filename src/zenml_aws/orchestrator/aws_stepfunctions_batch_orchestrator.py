@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+import uuid
 from collections import deque
 from datetime import datetime
 from typing import (
@@ -20,6 +21,9 @@ from typing import (
 import boto3
 from boto3 import Session
 from zenml.config.base_settings import BaseSettings
+from zenml.constants import (
+    METADATA_ORCHESTRATOR_RUN_ID,
+)
 from zenml.enums import ExecutionStatus, StackComponentType
 from zenml.logger import get_logger
 from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
@@ -35,26 +39,30 @@ from zenml_aws.aws_batch_job_definition import (
 from zenml_aws.constants import (
     AWS_BATCH_STEP_OPERATOR_FLAVOR,
     BATCH_JOB_TO_ZENML_EXECUTION_STATUS,
+    ENV_ZENML_STEP_FUNCTIONS_RUN_ID,
     STATE_MACHINE_EXECUTION_TO_ZENML_EXECUTION_STATUS,
+    AWSBatchJobStatus,
     AWSBatchTag,
     AWSStateMachineExecutionStatus,
 )
+from zenml_aws.flavors.aws_batch_step_operator_flavor import (
+    AWSBatchStepOperatorSettings,
+)
 
 # Custom imports
-from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
+from zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor import (
     AWSStepFunctionsOrchestratorConfig,
     AWSStepFunctionsOrchestratorSettings,
 )
 from zenml_aws.schema import (
-    AWSStepfunctionOrchestratorMetaData,
-)
-from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
-    AWSBatchStepOperatorSettings,
+    AWSBatchStepStepMetadata,
+    AWSBatchStepStepMetadataServer,
+    AWSStepFunctionPipelineMetadata,
+    AWSStepFunctionPipelineMetadataServer,
 )
 
 logger = get_logger(__name__)
 
-ENV_ZENML_STEP_FUNCTIONS_RUN_ID = "ZENML_STEP_FUNCTIONS_RUN_ID"
 MAX_TASK_DEFINITION_VERSIONS = 50
 
 
@@ -115,9 +123,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         Returns:
             The orchestrator run id.
-
-        Raises:
-            RuntimeError: If the run id cannot be read from the environment.
         """
         try:
             return os.environ[ENV_ZENML_STEP_FUNCTIONS_RUN_ID]
@@ -181,11 +186,26 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 )
         return boto_session
 
+    def get_pipeline_run_metadata(self, run_id: uuid.UUID) -> Dict[str, dict[str, str]]:
+        """Get general component-specific metadata for a pipeline run.
+
+        Args:
+            run_id: The ID of the pipeline run.
+
+        Returns:
+            A dictionary of metadata.
+        """
+
+        orchestrator_run_id = os.environ[ENV_ZENML_STEP_FUNCTIONS_RUN_ID]
+
+        return {METADATA_ORCHESTRATOR_RUN_ID: orchestrator_run_id}
+
     def fetch_status(
         self, run: "PipelineRunResponse", include_steps: bool = False
     ) -> Tuple[Optional[ExecutionStatus], Optional[Dict[str, ExecutionStatus]]]:
-        """Uses the run's AWS Stepfunction execution ARN contained in the
-        run's metadata to query the state machine's execution state from AWS.
+        """Uses orchestrator run id tag attached to the state machine to
+        retrieve the state machine execution's state. Does not support step
+        level status.
 
         Args:
             run (PipelineRunResponse): _description_
@@ -196,49 +216,107 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             machine execution status.
         """
 
-        orchestrator_run_metadata = AWSStepfunctionOrchestratorMetaData(**run.metadata)
-        boto_session = self._get_aws_session()
+        # Make sure that the stack exists and is accessible
+        if run.stack is None:
+            raise ValueError(
+                "The stack that the run was executed on is not available " "anymore."
+            )
 
-        # get stepfunction state machine execution status
+        # ensure pipeline run has advanced enough in its life cycle to avoid
+        # phantom pipeline runs on the server and ui
+        if (METADATA_ORCHESTRATOR_RUN_ID not in run.run_metadata) or (
+            run.orchestrator_run_id is None
+        ):
+            raise ValueError(
+                "Can not find the orchestrator run ID, thus can not fetch "
+                "the status."
+            )
+
+        # Make sure that the run belongs to this orchestrator
+        assert self.id == run.stack.components[StackComponentType.ORCHESTRATOR][0].id
+
+        boto_session = self._get_aws_session()
         stepfunction_client = boto_session.client("stepfunctions")
-        response = stepfunction_client.describe_execution(
-            executionArn=orchestrator_run_metadata.aws_stepfunctions.state_machine_execution_arn
+
+        logger.info(f"The fetch_status metadata: {run.run_metadata}")
+
+        # check for the orchestrator run id in the metadata, or the run's
+        # attribute
+        if "AWS Stepfunctions" not in run.run_metadata:
+            raise ValueError(
+                "Can not find the AWS Stepfunctions metadata, thus can not fetch "
+                "the status."
+            )
+
+        # Fetch the status of the pipeline
+        stepfunctions_metadata = AWSStepFunctionPipelineMetadataServer(
+            **run.run_metadata["AWS Stepfunctions"]
         )
-        state_machine_execution_status: AWSStateMachineExecutionStatus = response[
-            "status"
-        ]
+        state_machine_execution_status = stepfunction_client.describe_execution(
+            executionArn=stepfunctions_metadata.state_machine_execution_arn
+        )["status"]
         pipeline_status = STATE_MACHINE_EXECUTION_TO_ZENML_EXECUTION_STATUS[
             state_machine_execution_status
         ]
 
-        # get batch job statuses
-        batch_client = boto_session.client("batch")
-        job_statuses = {}
-        for step_name, step_meta in orchestrator_run_metadata.aws_batch.items():
-            paginator = batch_client.get_paginator("list_jobs")
-            for page in paginator.paginate(jobQueue=step_meta.job_queue_name):
-                for job in page["jobSummaryList"]:
-                    if job["jobDefinition"] == step_meta.job_definition_arn:
-                        job_statuses[step_name] = {
-                            "jobId": job["jobId"],
-                            "status": job["status"],
-                        }
+        if include_steps:
+            if "AWS Batch" not in run.run_metadata:
+                raise ValueError(
+                    "Can not find the AWS Stepfunctions metadata, thus can not fetch "
+                    "the status."
+                )
+            batch_metadata = {
+                step_name: AWSBatchStepStepMetadataServer(**step_meta_data)
+                for step_name, step_meta_data in run.run_metadata["AWS Batch"].items()
+            }
+            # get batch job statuses
+            batch_client = boto_session.client("batch")
 
-        step_statuses = {
-            step_name: BATCH_JOB_TO_ZENML_EXECUTION_STATUS[job_statuses[step_name]]
-            for step_name in job_statuses
-        }
+            jobs = {step: [] for step in batch_metadata}
+            for step_name, step_meta in batch_metadata.items():
+                paginator = batch_client.get_paginator("list_jobs")
+                for page in paginator.paginate(jobQueue=step_meta.job_queue_name):
+                    page_jobs = page["jobSummaryList"]
+                    jobs[step_name].extend(page_jobs)
 
-        return (pipeline_status, step_statuses)
+            job_statuses = {
+                step: AWSBatchJobStatus.submitted for step in batch_metadata
+            }
+            for step_name, step_jobs in jobs.items():
+                if not step_jobs:
+                    continue
+                step_job_descriptions = batch_client.describe_jobs(
+                    jobs=[job["jobId"] for job in step_jobs]
+                )["jobs"]
+                for job_description in step_job_descriptions:
+                    if (
+                        job_description["jobDefinition"]
+                        == batch_metadata[step_name].job_definition_arn
+                    ):
+                        job_statuses[step_name] = job_description["status"]
+                        break
+
+            step_statuses = {
+                step_name: BATCH_JOB_TO_ZENML_EXECUTION_STATUS[job_statuses[step_name]]
+                for step_name in job_statuses
+            }
+        else:
+            step_statuses = None
+
+        return pipeline_status, step_statuses
 
     def _stop_run(self, run: "PipelineRunResponse", graceful: bool = False) -> None:
-        orchestrator_run_metadata = AWSStepfunctionOrchestratorMetaData(**run.metadata)
+        run_metadata = run.metadata.run_metadata
+        logger.warning(f"Meta data for pipeline run: {run_metadata}")
+        stepfunctions_metadata = AWSStepFunctionPipelineMetadataServer(
+            **run_metadata["AWS Stepfunctions"]
+        )
         boto_session = self._get_aws_session()
 
         # get stepfunction state machine execution status
         stepfunction_client = boto_session.client("stepfunctions")
         _ = stepfunction_client.stop_execution(
-            executionArn=orchestrator_run_metadata.aws_stepfunctions.state_machine_execution_arn,
+            executionArn=stepfunctions_metadata.state_machine_execution_arn,
             cause="Cancelling execution via script",
         )
 
@@ -313,15 +391,20 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         step_name_to_unique_job_definition_name: dict[str, str] = {}
         step_name_to_arn_and_revision: dict[str, str] = {}
 
+        orchestrator_run_id = uuid.uuid4()
+
         for step_name, step in snapshot.step_configurations.items():
             step_environment = {
                 **snapshot.pipeline_configuration.environment,
                 **step_environments[step_name],
-                ENV_ZENML_STEP_FUNCTIONS_RUN_ID: str(placeholder_run.id),
+                # each step's environment must include the a priori
+                # orchestrator run id
+                ENV_ZENML_STEP_FUNCTIONS_RUN_ID: str(orchestrator_run_id),
             }
 
             step_aws_batch_job_definition = AWSBatchJobDefinition.from_orchestrator(
                 orchestrator=self,
+                orchestrator_run_id=str(orchestrator_run_id),
                 step=step,
                 placeholder_run=placeholder_run,
                 environment=step_environment,
@@ -357,7 +440,8 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         # assemble and run as stepfunctions state machine
         state_machine_definition = self.create_state_machine_definition(
-            snapshot, step_name_to_unique_job_definition_name
+            snapshot,
+            step_name_to_job_definition,
         )
 
         state_machine_definition_json = json.dumps(
@@ -374,9 +458,10 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             stepfunction_client=stepfunction_client,
             name=f"{sanitize_name(snapshot.pipeline.name,30)}-{state_machine_definition_hash}",
             definition=state_machine_definition,
+            orchestrator_run_id=str(orchestrator_run_id),
         )
 
-        execution_arn = self.start_state_machine_execution(
+        state_machine_execution_arn = self.start_state_machine_execution(
             stepfunction_client=stepfunction_client,
             state_machine_arn=state_machine_arn,
             pipeline_name=snapshot.pipeline_configuration.name,
@@ -388,16 +473,24 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 while True:
                     now = datetime.now()
                     response = stepfunction_client.describe_execution(
-                        executionArn=execution_arn
+                        executionArn=state_machine_execution_arn
                     )
-                    status: AWSStateMachineExecutionStatus = response["status"]
+                    state_machine_execution_status: AWSStateMachineExecutionStatus = (
+                        response["status"]
+                    )
+                    pipeline_status = STATE_MACHINE_EXECUTION_TO_ZENML_EXECUTION_STATUS[
+                        state_machine_execution_status
+                    ]
                     logger.info(
-                        f"Status of state machine execution {execution_arn}: [{status}] @{now}."
+                        f"Pipeline status: [{pipeline_status}].  State machine execution status {state_machine_execution_arn}: {state_machine_execution_status}] @{now}."
                     )
 
-                    if status == AWSStateMachineExecutionStatus.running:
+                    if (
+                        state_machine_execution_status
+                        == AWSStateMachineExecutionStatus.running
+                    ):
                         time.sleep(self.config.poll_interval_seconds)
-                    elif status in (
+                    elif state_machine_execution_status in (
                         AWSStateMachineExecutionStatus.succeeded,
                         AWSStateMachineExecutionStatus.failed,
                         AWSStateMachineExecutionStatus.aborted,
@@ -405,7 +498,10 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                     ):
                         break
 
-                if status in self.config.delete_stepfunctions_resource_on:
+                if (
+                    state_machine_execution_status
+                    in self.config.delete_stepfunctions_resource_on
+                ):
                     # clean up state machine
                     try:
                         stepfunction_client.delete_state_machine(
@@ -419,14 +515,19 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                             f"Failed to delete state machine {state_machine_arn}: {e}"
                         )
 
-                if status in (
+                if state_machine_execution_status in (
                     AWSStateMachineExecutionStatus.failed,
                     AWSStateMachineExecutionStatus.aborted,
                     AWSStateMachineExecutionStatus.timed_out,
                 ):
                     raise RuntimeError(
-                        f"State machine execution ARN {execution_arn} of state machine ARN {state_machine_arn} failed: [{status}]: {response} @{now}"
+                        f"Pipeline failed: [{pipeline_status}]. State machine execution {state_machine_execution_arn} of state machine {state_machine_arn} failed: [{state_machine_execution_status}]: {response} @{now}"
                     )
+                elif (
+                    state_machine_execution_status
+                    == AWSStateMachineExecutionStatus.succeeded
+                ):
+                    logger.info(f"Pipeline succeeded: [{pipeline_status}] @{now}")
         else:
             wait_for_completion = None
 
@@ -443,11 +544,17 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         return SubmissionResult(
             wait_for_completion=wait_for_completion,
-            metadata=AWSStepfunctionOrchestratorMetaData.from_arns(
-                state_machine_arn=state_machine_arn,
-                state_machine_execution_arn=execution_arn,
-                step_meta_data=step_meta_data,
-            ).model_dump(),
+            metadata={
+                "AWS Stepfunctions": AWSStepFunctionPipelineMetadata.from_arns(
+                    state_machine_arn, state_machine_execution_arn
+                ).model_dump(),
+                "AWS Batch": {
+                    step_name: AWSBatchStepStepMetadata.from_arns(
+                        **step_meta_data[step_name]
+                    ).model_dump()
+                    for step_name in step_meta_data
+                },
+            },
         )
 
     @staticmethod
@@ -498,109 +605,10 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         return [{"key": k, "value": v} for k, v in tags.items()]
 
-    def create_state_machine_from_definition(
-        self,
-        placeholder_run: PipelineRunResponse,
-        stepfunction_client: boto3.client,
-        name: str,
-        definition: Dict[str, Any],
-    ) -> str:
-        """Create an AWS Step Functions state machine.
-
-        Args:
-            sfn_client: Boto3 Step Functions client
-            name: Name of the state machine
-            definition: State machine definition dictionary
-            role_arn: ARN of the IAM role for the state machine
-
-        Returns:
-            The ARN of the created state machine
-        """
-
-        pipeline_settings: AWSStepFunctionsOrchestratorSettings = self.get_settings(
-            placeholder_run.snapshot
-        )
-
-        tags = [
-            {"key": AWSBatchTag.pipeline_name, "value": placeholder_run.pipeline.name},
-            {"key": AWSBatchTag.pipeline_run_id, "value": str(placeholder_run.id)},
-            {"key": AWSBatchTag.pipeline_run_name, "value": placeholder_run.name},
-        ]
-        tags.extend(self.map_tags(pipeline_settings.tags))
-
-        response = stepfunction_client.create_state_machine(
-            name=name,
-            definition=json.dumps(definition),
-            roleArn=self.config.stepfunctions_execution_role,
-            loggingConfiguration={
-                "level": "ALL",
-                "includeExecutionData": False,
-                "destinations": [
-                    {
-                        "cloudWatchLogsLogGroup": {
-                            "logGroupArn": self.config.stepfunctions_log_group_arn
-                        }
-                    }
-                ],
-            },
-            type="STANDARD",
-            tags=tags,
-        )
-
-        try:
-            state_machine_arn = response["stateMachineArn"]
-            logger.info(
-                f"Created AWS Stepfunctions state machine. ARN: "
-                f"{state_machine_arn} @{datetime.now()}"
-            )
-        except KeyError as e:
-            logger.info(
-                "Failed to create AWS Stepfunctions state machine @" f"{datetime.now()}"
-            )
-            raise e
-        return state_machine_arn
-
-    def start_state_machine_execution(
-        self,
-        stepfunction_client: boto3.client,
-        state_machine_arn: str,
-        pipeline_name: str,
-    ) -> str:
-        """Start execution of an AWS Step Functions state machine.
-
-        Args:
-            sfn_client: Boto3 Step Functions client
-            state_machine_arn: ARN of the state machine to execute
-            pipeline_name: Name of the ZenML pipeline
-
-        Returns:
-            The ARN of the execution
-        """
-
-        execution_name = f"zenml-{pipeline_name}-{int(time.time())}"
-        response = stepfunction_client.start_execution(
-            stateMachineArn=state_machine_arn,
-            name=execution_name,
-        )
-        try:
-            execution_arn = response["executionArn"]
-            logger.info(
-                f"Started execution of AWS Stepfunctions state machine "
-                f"{state_machine_arn}. Execution ARN: {execution_arn} @"
-                f"{datetime.now()}"
-            )
-            return execution_arn
-        except KeyError as e:
-            logger.info(
-                f"Failed to execute AWS Stepfunctions state machine "
-                f"{state_machine_arn} @{datetime.now()}"
-            )
-            raise e
-
     def create_state_machine_definition(
         self,
         snapshot: PipelineSnapshotResponse,
-        step_name_to_unique_job_definition_name: dict[str, str],
+        step_name_to_job_definition: dict[str, AWSBatchJobDefinition],
     ) -> Dict[str, Any]:
         """
         Creates an AWS Step Functions state machine for the ZenML pipeline.
@@ -639,11 +647,13 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                                 "Type": "Task",
                                 "Resource": "arn:aws:states:::batch:submitJob.sync",
                                 "Parameters": {
-                                    "JobDefinition": step_name_to_unique_job_definition_name[
+                                    "JobDefinition": step_name_to_job_definition[
                                         step_name
-                                    ],
+                                    ].jobDefinitionName,
                                     "JobQueue": step_settings.job_queue_name,
                                     "JobName": step_name,
+                                    # each batch job inherits tags from the definition
+                                    "Tags": step_name_to_job_definition[step_name].tags,
                                 },
                                 "End": True,
                             }
@@ -663,3 +673,104 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         }
 
         return definition
+
+    def create_state_machine_from_definition(
+        self,
+        placeholder_run: PipelineRunResponse,
+        stepfunction_client: boto3.client,
+        name: str,
+        definition: Dict[str, Any],
+        orchestrator_run_id: str,
+    ) -> str:
+        """Create an AWS Step Functions state machine.
+
+        Args:
+            sfn_client: Boto3 Step Functions client
+            name: Name of the state machine
+            definition: State machine definition dictionary
+            role_arn: ARN of the IAM role for the state machine
+
+        Returns:
+            The ARN of the created state machine
+        """
+
+        pipeline_settings: AWSStepFunctionsOrchestratorSettings = self.get_settings(
+            placeholder_run.snapshot
+        )
+
+        tags = [
+            {"key": AWSBatchTag.pipeline_name, "value": placeholder_run.pipeline.name},
+            {"key": AWSBatchTag.pipeline_run_id, "value": str(placeholder_run.id)},
+            {"key": AWSBatchTag.pipeline_run_name, "value": placeholder_run.name},
+            {"key": AWSBatchTag.orchestrator_run_id, "value": orchestrator_run_id},
+        ]
+        tags.extend(self.map_tags(pipeline_settings.tags))
+
+        response = stepfunction_client.create_state_machine(
+            name=name,
+            definition=json.dumps(definition),
+            roleArn=self.config.stepfunctions_execution_role,
+            loggingConfiguration={
+                "level": "ALL",
+                "includeExecutionData": False,
+                "destinations": [
+                    {
+                        "cloudWatchLogsLogGroup": {
+                            "logGroupArn": self.config.stepfunctions_log_group_arn
+                        }
+                    }
+                ],
+            },
+            type="STANDARD",
+            tags=tags,
+        )
+
+        try:
+            state_machine_arn = response["stateMachineArn"]
+            logger.info(
+                f"Created AWS Stepfunctions state machine. ARN: "
+                f"{state_machine_arn} @{datetime.now()}"
+            )
+        except KeyError as e:
+            logger.info(
+                "Failed to create AWS Stepfunctions state machine @" f"{datetime.now()}"
+            )
+            raise e
+        return state_machine_arn
+
+    @staticmethod
+    def start_state_machine_execution(
+        stepfunction_client: boto3.client,
+        state_machine_arn: str,
+        pipeline_name: str,
+    ) -> str:
+        """Start execution of an AWS Step Functions state machine.
+
+        Args:
+            sfn_client: Boto3 Step Functions client
+            state_machine_arn: ARN of the state machine to execute
+            pipeline_name: Name of the ZenML pipeline
+
+        Returns:
+            The ARN of the execution
+        """
+
+        execution_name = f"zenml-{pipeline_name}-{int(time.time())}"
+        response = stepfunction_client.start_execution(
+            stateMachineArn=state_machine_arn,
+            name=execution_name,
+        )
+        try:
+            execution_arn = response["executionArn"]
+            logger.info(
+                f"Started execution of AWS Stepfunctions state machine "
+                f"{state_machine_arn}. Execution ARN: {execution_arn} @"
+                f"{datetime.now()}"
+            )
+            return execution_arn
+        except KeyError as e:
+            logger.info(
+                f"Failed to execute AWS Stepfunctions state machine "
+                f"{state_machine_arn} @{datetime.now()}"
+            )
+            raise e

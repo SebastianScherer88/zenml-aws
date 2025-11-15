@@ -56,10 +56,14 @@ class AWSBatchStepStepMetadata(BaseModel):
         )
 
 
-class AWSStepFunctionPipelineMetadata(BaseModel):
-    state_machine_arn: str = (
-        "arn:aws:states:{region}:{account_id}:stateMachine:{state_machine_name}"
+class AWSBatchStepStepMetadataServer(AWSBatchStepStepMetadata):
+    model_config = ConfigDict(
+        serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=True
     )
+
+
+class AWSStepFunctionPipelineMetadata(BaseModel):
+    state_machine_arn: str
     state_machine_name: str
     state_machine_url: str
     state_machine_execution_arn: str
@@ -103,54 +107,60 @@ class AWSStepFunctionPipelineMetadata(BaseModel):
         )
 
 
-class AWSStepfunctionOrchestratorMetaData(BaseModel):
-    aws_stepfunctions: AWSStepFunctionPipelineMetadata
-    aws_batch: dict[str, AWSBatchStepStepMetadata]
-
+class AWSStepFunctionPipelineMetadataServer(AWSStepFunctionPipelineMetadata):
     model_config = ConfigDict(
-        serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=False
+        serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=True
     )
 
-    @classmethod
-    def from_arns(
-        cls,
-        state_machine_arn: str,
-        state_machine_execution_arn: str,
-        step_meta_data: dict[
-            str, dict[Literal["job_definition_arn", "job_backend"], str]
-        ],
-    ) -> "AWSStepfunctionOrchestratorMetaData":
-        return cls(
-            aws_stepfunctions=AWSStepFunctionPipelineMetadata.from_arns(
-                state_machine_arn, state_machine_execution_arn
-            ),
-            aws_batch={
-                step_name: AWSBatchStepStepMetadata.from_arns(
-                    **step_meta_data[step_name]
-                )
-                for step_name in step_meta_data
-            },
-        )
 
-    #     region = state_machine_execution_arn.split(":")[3]
+# class AWSStepfunctionOrchestratorMetaData(BaseModel):
+#     aws_stepfunctions: AWSStepFunctionPipelineMetadata
+#     aws_batch: dict[str, AWSBatchStepStepMetadata]
 
-    #     return cls(
-    #         orchestrator_run_id=state_machine_execution_arn,
-    #         orchestrator_url=(
-    #             f"https://{region}.console.aws.amazon.com/states/home"
-    #             f"?region={region}#/executions/details/{state_machine_execution_arn}"
-    #         ),
-    #         orchestrator_logs_url=(
-    #             f"https://{region}.console.aws.amazon.com/cloudwatch/home"
-    #             f"?region={region}#logsV2:log-groups/log-group/$252Faws$252F"
-    #             "batch$252Fjob"
-    #         ),
-    #         state_machine_arn=state_machine_arn,
-    #         state_machine_execution_arn=state_machine_execution_arn,
-    #         step_job_definitions=step_job_definitions,
-    #         pipeline=AWSStepFunctionsOrchestratorPipelineMetadata(),
-    #         steps={
-    #             step_name: AWSStepFunctionsOrchestratorStepMetadata(step_name=step_name)
-    #             for step_name in step_job_definitions.keys()
-    #         },
-    #     )
+#     model_config = ConfigDict(
+#         serialize_by_alias=True, alias_generator=prettify_alias, validate_by_alias=False,extra="ignore"
+#     )
+
+#     @classmethod
+#     def from_arns(
+#         cls,
+#         state_machine_arn: str,
+#         state_machine_execution_arn: str,
+#         step_meta_data: dict[
+#             str, dict[Literal["job_definition_arn", "job_backend"], str]
+#         ],
+#     ) -> "AWSStepfunctionOrchestratorMetaData":
+#         return cls(
+#             aws_stepfunctions=AWSStepFunctionPipelineMetadata.from_arns(
+#                 state_machine_arn, state_machine_execution_arn
+#             ),
+#             aws_batch={
+#                 step_name: AWSBatchStepStepMetadata.from_arns(
+#                     **step_meta_data[step_name]
+#                 )
+#                 for step_name in step_meta_data
+#             },
+#         )
+
+#     region = state_machine_execution_arn.split(":")[3]
+
+#     return cls(
+#         orchestrator_run_id=state_machine_execution_arn,
+#         orchestrator_url=(
+#             f"https://{region}.console.aws.amazon.com/states/home"
+#             f"?region={region}#/executions/details/{state_machine_execution_arn}"
+#         ),
+#         orchestrator_logs_url=(
+#             f"https://{region}.console.aws.amazon.com/cloudwatch/home"
+#             f"?region={region}#logsV2:log-groups/log-group/$252Faws$252F"
+#             "batch$252Fjob"
+#         ),
+#         state_machine_arn=state_machine_arn,
+#         state_machine_execution_arn=state_machine_execution_arn,
+#         step_job_definitions=step_job_definitions,
+#         pipeline=AWSStepFunctionsOrchestratorPipelineMetadata(),
+#         steps={
+#             step_name: AWSStepFunctionsOrchestratorStepMetadata(step_name=step_name)
+#             for step_name in step_job_definitions.keys()
+#         },
+#     )

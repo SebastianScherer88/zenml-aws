@@ -1,11 +1,12 @@
-version: "3.9"
-
 services:
   zenml:
     image: zenmldocker/zenml-server:0.91.0
+    build:
+      dockerfile: ./infrastructure/docker/server/Dockerfile
+      context: .
     ports:
       - "8080:8080"
-    env_file: docker/server/zenml-server.env
+    env_file: infrastructure/docker/server/zenml-server.env
     volumes:
       - ~/.aws:/home/zenml/.aws:ro
       # for some reason, these do not work:

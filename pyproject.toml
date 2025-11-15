@@ -3,7 +3,7 @@ name = "zenml-aws"
 version = "0.1.0"
 description = "A collection of AWS integrations for the zenml platform"
 readme = "README.md"
-requires-python = "==3.12.*"
+requires-python = ">=3.11"
 dependencies = [
     "zenml>=0.91.0",
 ]

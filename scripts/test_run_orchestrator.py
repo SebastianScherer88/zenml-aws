@@ -2,11 +2,11 @@ import click
 from zenml import pipeline, step
 from zenml.config import DockerSettings, ResourceSettings
 
-from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
-    AWSStepFunctionsOrchestratorSettings,
-)
-from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+from zenml_aws.flavors.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorSettings,
+)
+from zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor import (
+    AWSStepFunctionsOrchestratorSettings,
 )
 
 docker_settings = DockerSettings(

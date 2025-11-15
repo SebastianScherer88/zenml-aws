@@ -2,7 +2,7 @@ import click
 from zenml import pipeline, step
 from zenml.config import DockerSettings, ResourceSettings
 
-from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+from zenml_aws.flavors.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorSettings,
 )
 
