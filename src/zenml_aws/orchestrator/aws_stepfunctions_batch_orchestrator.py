@@ -122,9 +122,14 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         Important: This needs to be a unique ID and return the same value for
         all steps of a pipeline run.
 
+        Runs on the zenml step, i.e. as a zenml hook inside the AWS Batch job.
+
         Returns:
             The orchestrator run id.
         """
+
+        logger.warning("Running `get_orchestrator_run_id` method.")
+
         try:
             return os.environ[ENV_ZENML_STEP_FUNCTIONS_RUN_ID]
         except KeyError:
@@ -190,12 +195,16 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
     def get_pipeline_run_metadata(self, run_id: uuid.UUID) -> Dict[str, dict[str, str]]:
         """Get general component-specific metadata for a pipeline run.
 
+        Runs on the zenml step, i.e. as a zenml hook inside the AWS Batch job.
+
         Args:
             run_id: The ID of the pipeline run.
 
         Returns:
             A dictionary of metadata.
         """
+
+        logger.warning("Running `get_pipeline_run_metadata` method.")
 
         orchestrator_run_id = os.environ[ENV_ZENML_STEP_FUNCTIONS_RUN_ID]
 
@@ -206,7 +215,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
     ) -> Tuple[Optional[ExecutionStatus], Optional[Dict[str, ExecutionStatus]]]:
         """Uses orchestrator run id tag attached to the state machine to
         retrieve the state machine execution's state. Does not support step
-        level status.
+        level status. Runs on the zenml server.
 
         Args:
             run (PipelineRunResponse): _description_
@@ -311,10 +320,8 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         return pipeline_status, step_statuses
 
     def _stop_run(self, run: "PipelineRunResponse", graceful: bool = False) -> None:
-        run_metadata = run.metadata.run_metadata
-        logger.warning(f"Meta data for pipeline run: {run_metadata}")
         stepfunctions_metadata = AWSStepFunctionPipelineMetadataServer(
-            **run_metadata["AWS Stepfunctions"]
+            **run.run_metadata["AWS Stepfunctions"]
         )
         boto_session = self._get_aws_session()
 

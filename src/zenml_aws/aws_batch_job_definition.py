@@ -288,7 +288,7 @@ class AWSBatchJobDefinition(BaseModel):
                 "options": {
                     "awslogs-group": pipeline_config.batch_log_group,
                     "awslogs-region": pipeline_config.region,
-                    "awslogs-stream-prefix": f"orchestrator/{orchestrator_run_id}/",
+                    "awslogs-stream-prefix": f"orchestrator/{orchestrator_run_id}",
                 },
             }
         }
@@ -662,5 +662,6 @@ def register_new_batch_job_definition(
         )
         return batch_job_definition_arn
     else:
-        logger.error(f"Could not register new AWS Batch job definition: {response}")
-        return None
+        raise RuntimeError(
+            f"Could not register new AWS Batch job definition: {response}"
+        )
