@@ -288,7 +288,7 @@ class AWSBatchJobDefinition(BaseModel):
                 "options": {
                     "awslogs-group": pipeline_config.batch_log_group,
                     "awslogs-region": pipeline_config.region,
-                    "awslogs-stream-prefix": f"orchestrator/{placeholder_run.orchestrator_run_id}/",
+                    "awslogs-stream-prefix": f"orchestrator/{orchestrator_run_id}/",
                 },
             }
         }
