@@ -20,6 +20,7 @@ from typing import (
 
 import boto3
 from boto3 import Session
+from zenml.client import Client
 from zenml.config.base_settings import BaseSettings
 from zenml.constants import (
     METADATA_ORCHESTRATOR_RUN_ID,
@@ -701,8 +702,13 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         pipeline_settings: AWSStepFunctionsOrchestratorSettings = self.get_settings(
             placeholder_run.snapshot
         )
+        client = Client()
 
         tags = [
+            {"key": AWSBatchTag.stack_id, "value": str(client.active_stack.id)},
+            {"key": AWSBatchTag.stack_name, "value": client.active_stack.name},
+            {"key": AWSBatchTag.component_id, "value": str(self.id)},
+            {"key": AWSBatchTag.component_name, "value": self.name},
             {"key": AWSBatchTag.pipeline_name, "value": placeholder_run.pipeline.name},
             {"key": AWSBatchTag.pipeline_run_id, "value": str(placeholder_run.id)},
             {"key": AWSBatchTag.pipeline_run_name, "value": placeholder_run.name},

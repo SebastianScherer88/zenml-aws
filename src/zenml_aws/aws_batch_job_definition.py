@@ -16,6 +16,7 @@ from pydantic import (
     field_validator,
     model_serializer,
 )
+from zenml.client import Client
 from zenml.config import ResourceSettings
 from zenml.config.step_configurations import Step
 from zenml.config.step_run_info import StepRunInfo
@@ -259,8 +260,14 @@ class AWSBatchJobDefinition(BaseModel):
             orchestrator.get_settings(placeholder_run.snapshot)
         )
         # meta data tags
+        client = Client()
         tags: dict[str, str] = cls.generate_tags(
-            placeholder_run=placeholder_run, step_name=step.config.name
+            stack_id=str(client.active_stack.id),
+            stack_name=client.active_stack.name,
+            component_id=str(orchestrator.id),
+            component_name=orchestrator.name,
+            placeholder_run=placeholder_run,
+            step_name=step.config.name,
         )
         # we always apply the stepfunction orchestrator tags
         tags.update(pipeline_settings.tags)
@@ -333,7 +340,15 @@ class AWSBatchJobDefinition(BaseModel):
 
         # if the step's settings include tags, update the system tags before
         # submitting
-        tags = cls.generate_tags(info)
+        client = Client()
+
+        tags = cls.generate_tags(
+            stack_id=str(client.active_stack.id),
+            stack_name=client.active_stack.name,
+            component_id=str(step_operator.id),
+            component_name=step_operator.name,
+            info=info,
+        )
         tags.update(step_settings.tags)
 
         container_kwargs = {
@@ -379,6 +394,10 @@ class AWSBatchJobDefinition(BaseModel):
 
     @staticmethod
     def generate_tags(
+        stack_id: str,
+        stack_name: str,
+        component_id: str,
+        component_name: str,
         info: StepRunInfo | None = None,
         placeholder_run: PipelineRunResponse | None = None,
         step_name: str | None = None,
@@ -388,35 +407,53 @@ class AWSBatchJobDefinition(BaseModel):
         respectively.
 
         Args:
+            component_id (str): The id of the zenml-aws component generating
+                this tag set
+            component_name (str): The name of the zenml-aws component generating
+                this tag set
             info (StepRunInfo | None, optional): The StepRunInfo object passed
-            to the custom step operator's `launch` method. If provided, used to
-            generate step level tags for the step operator AWS resources.
+                to the custom step operator's `launch` method. If provided,
+                used to generate step level tags for the step operator AWS
+                resources.
             placeholder_run (PipelineRunResponse | None, optional): The
-            PipelineRunResponse object passed to the custom orchestrator's
-            `submit_pipeline` method. Only used if no `info` argument is
-            provided.
+                PipelineRunResponse object passed to the custom orchestrator's
+                `submit_pipeline` method. Only used if no `info` argument is
+                provided.
             step_name (str | None, optional): The name of the step. Defaults to
-             None. Only used if no `info` argument is
-            provided.
+                None. Only used if no `info` argument is provided.
 
         Returns:
             dict[str, str]: A dictionary of zenml run meta data tags
         """
+
+        tags = {
+            AWSBatchTag.stack_id: stack_id,
+            AWSBatchTag.stack_name: stack_name,
+            AWSBatchTag.component_id: component_id,
+            AWSBatchTag.component_name: component_name,
+        }
+
         if info is not None:
-            return {
-                AWSBatchTag.pipeline_name: info.pipeline.name,
-                AWSBatchTag.pipeline_run_id: str(info.run_id),
-                AWSBatchTag.pipeline_run_name: info.run_name,
-                AWSBatchTag.step_name: info.pipeline_step_name,
-                AWSBatchTag.step_run_id: str(info.step_run_id),
-            }
+            tags.update(
+                {
+                    AWSBatchTag.pipeline_name: info.pipeline.name,
+                    AWSBatchTag.pipeline_run_id: str(info.run_id),
+                    AWSBatchTag.pipeline_run_name: info.run_name,
+                    AWSBatchTag.step_name: info.pipeline_step_name,
+                    AWSBatchTag.step_run_id: str(info.step_run_id),
+                }
+            )
         else:
-            return {
-                AWSBatchTag.pipeline_name: placeholder_run.pipeline.name,
-                AWSBatchTag.pipeline_run_id: str(placeholder_run.id),
-                AWSBatchTag.pipeline_run_name: placeholder_run.name,
-                AWSBatchTag.step_name: step_name,
-            }
+            tags.update(
+                {
+                    AWSBatchTag.pipeline_name: placeholder_run.pipeline.name,
+                    AWSBatchTag.pipeline_run_id: str(placeholder_run.id),
+                    AWSBatchTag.pipeline_run_name: placeholder_run.name,
+                    AWSBatchTag.step_name: step_name,
+                }
+            )
+
+        return tags
 
     def generate_name(self, pipeline_name: str, step_name: str) -> str:
         """Utility to generate a unique AWS Batch job name.
