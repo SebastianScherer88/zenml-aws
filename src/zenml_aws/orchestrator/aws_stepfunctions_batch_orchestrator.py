@@ -248,7 +248,8 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 "the status."
             )
 
-        # Fetch the status of the pipeline
+        # Fetch the status of the pipeline, using the static meta data's
+        # state machine execution arn as reference
         stepfunctions_metadata = AWSStepFunctionPipelineMetadataServer(
             **run.run_metadata["AWS Stepfunctions"]
         )
@@ -259,6 +260,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             state_machine_execution_status
         ]
 
+        # Fetch the status of the steps, using the static meta data's
+        # batch job definition arns as reference; unfortunately, the AWS
+        # tagging does not currently support AWS Batch for tag based querying
         if include_steps:
             if "AWS Batch" not in run.run_metadata:
                 raise ValueError(
