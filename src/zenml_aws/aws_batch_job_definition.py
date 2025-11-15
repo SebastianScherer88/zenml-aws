@@ -407,6 +407,8 @@ class AWSBatchJobDefinition(BaseModel):
         respectively.
 
         Args:
+            stack_id (str): The id of the active zenml stack.
+            stack_name (str): The name of the active zenml stack.
             component_id (str): The id of the zenml-aws component generating
                 this tag set
             component_name (str): The name of the zenml-aws component generating
