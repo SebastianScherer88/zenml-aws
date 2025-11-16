@@ -14,6 +14,7 @@ class AWSBatchStepStepMetadata(BaseModel):
     job_definition_revision: int
     job_definition_url: str
     job_queue_name: str
+    job_backend: str
     job_arn: str = ""  # "arn:aws:batch:{region}:{account_id}:job/{job_id}"
     job_id: str = ""
     job_url: str = ""  # "https://{region}.console.aws.amazon.com/batch/home?region={region}#jobs/{backend:fargate/ec2}/detail/{job_id}"  # or 'ec2' instead of 'fargate'. this site includes a Logging tab displaying step logs
@@ -50,6 +51,7 @@ class AWSBatchStepStepMetadata(BaseModel):
             job_definition_revision=int(revision),
             job_definition_url=job_definition_url,
             job_queue_name=job_queue_name,
+            job_backend=job_backend,
             job_arn=job_arn,
             job_id=job_id,
             job_url=job_url,

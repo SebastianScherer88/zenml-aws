@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+import traceback
 import uuid
 from collections import deque
 from datetime import datetime
@@ -20,8 +21,10 @@ from typing import (
 
 import boto3
 from boto3 import Session
+from zenml import log_metadata
 from zenml.client import Client
 from zenml.config.base_settings import BaseSettings
+from zenml.config.step_run_info import StepRunInfo
 from zenml.constants import (
     METADATA_ORCHESTRATOR_RUN_ID,
 )
@@ -40,7 +43,10 @@ from zenml_aws.aws_batch_job_definition import (
 from zenml_aws.constants import (
     AWS_BATCH_STEP_OPERATOR_FLAVOR,
     BATCH_JOB_TO_ZENML_EXECUTION_STATUS,
+    ENV_ZENML_STEP_FUNCTIONS_JOB_ID,
+    ENV_ZENML_STEP_FUNCTIONS_REGION,
     ENV_ZENML_STEP_FUNCTIONS_RUN_ID,
+    ENV_ZENML_STEP_FUNCTIONS_STEP_NAME,
     STATE_MACHINE_EXECUTION_TO_ZENML_EXECUTION_STATUS,
     AWSBatchJobStatus,
     AWSBatchTag,
@@ -192,6 +198,74 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 )
         return boto_session
 
+    def prepare_step_run(self, info: StepRunInfo):
+        logger.warning("Running `prepare_step_run` method.")
+
+        try:
+            # assemble the job_arn rather than query the aws api, since that would
+            # require non-default batch job role permissions
+            # use batch environment vars to retrieve some step related/setting
+            # values
+            step_name = os.environ[ENV_ZENML_STEP_FUNCTIONS_STEP_NAME]
+            job_id = os.environ[ENV_ZENML_STEP_FUNCTIONS_JOB_ID]
+            region = os.environ[ENV_ZENML_STEP_FUNCTIONS_REGION]
+            client = boto3.client("sts")
+            account_id = client.get_caller_identity()["Account"]
+            # arn:aws:batch:eu-west-1:743582000746:job/3d87cb47-1ebf-4292-9e7e-b5d685025275
+            job_arn = f"arn:aws:batch:{region}:{account_id}:job/{job_id}"
+
+            # retrieve the step's settings and the pipeline run' static metadata
+            # that was created via the submit_pipeline's SubmissionResult metadata
+            # attribute
+            pipeline_run = Client().get_pipeline_run(info.run_id)
+
+            stepfunctions_metadata = AWSStepFunctionPipelineMetadataServer(
+                **pipeline_run.run_metadata["Pipeline"]
+            ).model_dump()
+            step_batch_metadata_static = AWSBatchStepStepMetadataServer(
+                **pipeline_run.run_metadata[f"Step[{step_name}]"]
+            )
+            step_settings = self.get_step_settings(step_name, pipeline_run.snapshot)
+
+            # assemble runtime step batch metadata that includes the job execution
+            # information
+            step_batch_metadata_runtime = AWSBatchStepStepMetadata.from_arns(
+                job_definition_arn=step_batch_metadata_static.job_definition_arn,
+                job_backend=step_settings.backend.lower(),
+                job_queue_name=step_settings.job_queue_name,
+                job_arn=job_arn,
+            ).model_dump()
+
+            # log this step's
+            # - static stepfunctions metadata relating to the pipeline
+            # - runtime batch metadata relating to this step only
+            logger.warning(
+                "Logging step metadata for batch and stepfunctions from inside `prepare_step_run` method."
+            )
+            logger.warning(f"The step data available: {pipeline_run.steps}")
+            log_metadata(
+                metadata={
+                    "Pipeline": stepfunctions_metadata,
+                    "Step": step_batch_metadata_runtime,
+                },
+                run_id_name_or_prefix=pipeline_run.id,
+                step_name=step_name,
+            )
+
+            # log this step's runtime batch metadata to the pipeline run metadata,
+            # overriding the initial static metadata
+            logger.warning(
+                "Overriding pipeline metadata for batch from inside `prepare_step_run` method."
+            )
+            log_metadata(
+                metadata={
+                    f"Step[{step_name}]": step_batch_metadata_runtime,
+                },
+                run_id_name_or_prefix=pipeline_run.id,
+            )
+        except Exception:
+            logger.error(f"Meta data update failed: {traceback.print_exc()}")
+
     def get_pipeline_run_metadata(self, run_id: uuid.UUID) -> Dict[str, dict[str, str]]:
         """Get general component-specific metadata for a pipeline run.
 
@@ -206,9 +280,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         logger.warning("Running `get_pipeline_run_metadata` method.")
 
-        orchestrator_run_id = os.environ[ENV_ZENML_STEP_FUNCTIONS_RUN_ID]
-
-        return {METADATA_ORCHESTRATOR_RUN_ID: orchestrator_run_id}
+        return {
+            METADATA_ORCHESTRATOR_RUN_ID: self.get_orchestrator_run_id(),
+        }
 
     def fetch_status(
         self, run: "PipelineRunResponse", include_steps: bool = False
@@ -252,7 +326,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
         # check for the orchestrator run id in the metadata, or the run's
         # attribute
-        if "AWS Stepfunctions" not in run.run_metadata:
+        if "Pipeline" not in run.run_metadata:
             raise ValueError(
                 "Can not find the AWS Stepfunctions metadata, thus can not fetch "
                 "the status."
@@ -261,7 +335,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         # Fetch the status of the pipeline, using the static meta data's
         # state machine execution arn as reference
         stepfunctions_metadata = AWSStepFunctionPipelineMetadataServer(
-            **run.run_metadata["AWS Stepfunctions"]
+            **run.run_metadata["Pipeline"]
         )
         state_machine_execution_status = stepfunction_client.describe_execution(
             executionArn=stepfunctions_metadata.state_machine_execution_arn
@@ -274,15 +348,18 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         # batch job definition arns as reference; unfortunately, the AWS
         # tagging does not currently support AWS Batch for tag based querying
         if include_steps:
-            if "AWS Batch" not in run.run_metadata:
+            try:
+                batch_metadata = {
+                    step_name: AWSBatchStepStepMetadataServer(
+                        **run.run_metadata[f"Step[{step_name}]"]
+                    )
+                    for step_name in run.steps
+                }
+            except KeyError:
                 raise ValueError(
-                    "Can not find the AWS Stepfunctions metadata, thus can not fetch "
-                    "the status."
+                    "Can not find the Step metadata for at least one step, thus"
+                    " can not fetch the status."
                 )
-            batch_metadata = {
-                step_name: AWSBatchStepStepMetadataServer(**step_meta_data)
-                for step_name, step_meta_data in run.run_metadata["AWS Batch"].items()
-            }
             # get batch job statuses
             batch_client = boto_session.client("batch")
 
@@ -321,7 +398,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
 
     def _stop_run(self, run: "PipelineRunResponse", graceful: bool = False) -> None:
         stepfunctions_metadata = AWSStepFunctionPipelineMetadataServer(
-            **run.run_metadata["AWS Stepfunctions"]
+            **run.run_metadata["Pipeline"]
         )
         boto_session = self._get_aws_session()
 
@@ -412,6 +489,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 # each step's environment must include the a priori
                 # orchestrator run id
                 ENV_ZENML_STEP_FUNCTIONS_RUN_ID: str(orchestrator_run_id),
+                ENV_ZENML_STEP_FUNCTIONS_STEP_NAME: step_name,
             }
 
             step_aws_batch_job_definition = AWSBatchJobDefinition.from_orchestrator(
@@ -554,19 +632,23 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             for step_name in step_name_to_job_definition
         }
 
+        submission_metadata = {
+            "Pipeline": AWSStepFunctionPipelineMetadata.from_arns(
+                state_machine_arn, state_machine_execution_arn
+            ).model_dump()
+        }
+        for step_name in step_meta_data:
+            submission_metadata[f"Step[{step_name}]"] = (
+                AWSBatchStepStepMetadata.from_arns(
+                    **step_meta_data[step_name]
+                ).model_dump()
+            )
+
+        logger.info(f"Submission meta data: {submission_metadata}")
+
         return SubmissionResult(
             wait_for_completion=wait_for_completion,
-            metadata={
-                "AWS Stepfunctions": AWSStepFunctionPipelineMetadata.from_arns(
-                    state_machine_arn, state_machine_execution_arn
-                ).model_dump(),
-                "AWS Batch": {
-                    step_name: AWSBatchStepStepMetadata.from_arns(
-                        **step_meta_data[step_name]
-                    ).model_dump()
-                    for step_name in step_meta_data
-                },
-            },
+            metadata=submission_metadata,
         )
 
     @staticmethod
