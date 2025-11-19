@@ -211,7 +211,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             region = os.environ[ENV_ZENML_STEP_FUNCTIONS_REGION]
             client = boto3.client("sts")
             account_id = client.get_caller_identity()["Account"]
-            # arn:aws:batch:eu-west-1:743582000746:job/3d87cb47-1ebf-4292-9e7e-b5d685025275
             job_arn = f"arn:aws:batch:{region}:{account_id}:job/{job_id}"
 
             # retrieve the step's settings and the pipeline run' static metadata
