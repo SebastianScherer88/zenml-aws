@@ -145,7 +145,6 @@ class ZenMLAWSStack(ComponentResource):
         )
         self.batch_ec2_job_queue = aws.batch.JobQueue(
             "zenml-batch-ec2-job-queue",
-            name="zenml-test-ec2-job-queue",
             priority=1,
             state="ENABLED",
             compute_environment_orders=[
@@ -157,7 +156,6 @@ class ZenMLAWSStack(ComponentResource):
         )
         self.batch_fargate_job_queue = aws.batch.JobQueue(
             "zenml-batch-fargate-job-queue",
-            name="zenml-test-fargate-job-queue",
             priority=1,
             state="ENABLED",
             compute_environment_orders=[
@@ -172,7 +170,6 @@ class ZenMLAWSStack(ComponentResource):
         # --- batch ecs roles
         self.batch_ecs_job_role = aws.iam.Role(
             "zenml-batch-job-role",
-            name="batch-job-role",
             assume_role_policy=json.dumps(
                 {
                     "Version": "2012-10-17",
@@ -194,7 +191,6 @@ class ZenMLAWSStack(ComponentResource):
         )
         self.batch_ecs_execution_role = aws.iam.Role(
             "zenml-batch-execution-role",
-            name="batch-execution-role",
             assume_role_policy=json.dumps(
                 {
                     "Version": "2012-10-17",
