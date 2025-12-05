@@ -29,18 +29,31 @@ class NetworkStack(pulumi.ComponentResource):
 
         self.vpc = aws.ec2.get_vpc(default=True)
         self.security_group = aws.ec2.SecurityGroup(
-            "zenml-server-sg",
+            "zenml-sg",
             description="Security group for ZenML server and metadata store",
             vpc_id=self.vpc.id,  # must be the VPC where ECS & RDS are
-            egress=[
-                aws.ec2.SecurityGroupEgressArgs(
-                    protocol="-1",
-                    from_port=0,
-                    to_port=0,
-                    cidr_blocks=["0.0.0.0/0"],  # allow all outbound
-                    description="Allow all outbound traffic",
-                )
-            ],
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        aws.ec2.SecurityGroupRule(
+            "zenml-sg-egress-all",
+            type="egress",
+            from_port=0,
+            to_port=0,
+            protocol="-1",
+            security_group_id=self.security_group.id,
+            cidr_blocks=["0.0.0.0/0"],
+            description="Allow all outbound traffic",
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        aws.ec2.SecurityGroupRule(
+            "zenml-sg-ingress-self",
+            type="ingress",
+            from_port=0,
+            to_port=0,
+            protocol="-1",
+            security_group_id=self.security_group.id,
+            source_security_group_id=self.security_group.id,
+            description="Allow all inbound from this same security group",
             opts=pulumi.ResourceOptions(parent=self),
         )
         sn_public = aws.ec2.get_subnets(

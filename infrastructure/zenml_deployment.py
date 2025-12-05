@@ -86,6 +86,7 @@ class ZenMLDeployment(ComponentResource):
             protocol="tcp",
             security_group_id=network_stack.security_group.id,
             cidr_blocks=[f"{my_ip()}/32"],
+            description="Allow ingress to the zenml server from dev instance.",
             opts=pulumi.ResourceOptions(parent=self),
         )
         aws.ec2.SecurityGroupRule(
@@ -96,6 +97,7 @@ class ZenMLDeployment(ComponentResource):
             protocol="tcp",
             security_group_id=network_stack.security_group.id,
             cidr_blocks=[f"{my_ip()}/32"],
+            description="Allow ingress to the zenml meta data store from dev instance.",
             opts=pulumi.ResourceOptions(parent=self),
         )
         sn_public = aws.ec2.get_subnets(
