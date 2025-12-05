@@ -6,9 +6,10 @@ from typing import Literal
 import pulumi
 import pulumi_aws as aws
 import requests
+from network import NetworkStack
 from pulumi.resource import ComponentResource
 from pydantic import BaseModel
-from zenml_stack import ZenMLRemoteStack
+from zenml_stack import ZenMLAWSStack
 
 
 def my_ip() -> str:
@@ -59,10 +60,8 @@ class ZenMLDeployment(ComponentResource):
     def __init__(
         self,
         config: ZenMLDeploymentConfig,
-        zenml_remote_stack: ZenMLRemoteStack,
-        vpc: aws.ec2.Vpc | None = None,
-        subnets: aws.ec2.GetSubnetsResult | None = None,
-        security_group: aws.ec2.GetSecurityGroupResult | None = None,
+        network_stack: NetworkStack,
+        zenml_stack: ZenMLAWSStack,
         opts: pulumi.ResourceOptions | None = None,
     ):
         super().__init__(
@@ -73,94 +72,67 @@ class ZenMLDeployment(ComponentResource):
 
         self.config = config
 
-        self.get_network_configuration(vpc, subnets, security_group)
-        self.create_metadata_store()
-        self.create_server(zenml_remote_stack)
+        self.configure_network(network_stack)
+        self.create_metadata_store(network_stack)
+        self.create_server(network_stack, zenml_stack)
 
-    def get_network_configuration(
-        self,
-        vpc: aws.ec2.Vpc | None,
-        subnets: list[aws.ec2.Subnet] | None,
-        security_group: list[aws.ec2.SecurityGroup] | None,
-    ):
+    def configure_network(self, network_stack: NetworkStack):
         """Resolve the server network configuration."""
-        if not self.config.server.service_assign_public_ip:
-            if any([spec is None for spec in (vpc, subnets, security_group)]):
-                raise ValueError(
-                    "If default network configuration is disabled, vpc, subnets and security groups must be specified."
-                )
-            self.vpc = vpc
-            self.subnets = subnets
-            self.security_group = security_group
+        aws.ec2.SecurityGroupRule(
+            "zenml-sg-ingress-server",
+            type="ingress",
+            from_port=self.config.server.container_port,
+            to_port=self.config.server.container_port,
+            protocol="tcp",
+            security_group_id=network_stack.security_group.id,
+            cidr_blocks=[f"{my_ip()}/32"],
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        aws.ec2.SecurityGroupRule(
+            "zenml-sg-ingress-metadata-store",
+            type="ingress",
+            from_port=self.config.metadata_store.port,
+            to_port=self.config.metadata_store.port,
+            protocol="tcp",
+            security_group_id=network_stack.security_group.id,
+            cidr_blocks=[f"{my_ip()}/32"],
+            opts=pulumi.ResourceOptions(parent=self),
+        )
+        sn_public = aws.ec2.get_subnets(
+            filters=[
+                aws.ec2.GetSubnetsFilterArgs(
+                    name="vpc-id",
+                    values=[network_stack.vpc.id],
+                ),
+                aws.ec2.GetSubnetsFilterArgs(
+                    name="map-public-ip-on-launch",
+                    values=["true"],
+                ),
+            ]
+        )
+
+        sn_private = aws.ec2.get_subnets(
+            filters=[
+                aws.ec2.GetSubnetsFilterArgs(
+                    name="vpc-id",
+                    values=[network_stack.vpc.id],
+                ),
+                aws.ec2.GetSubnetsFilterArgs(
+                    name="map-public-ip-on-launch",
+                    values=["false"],
+                ),
+            ]
+        )
+        if self.config.server.service_assign_public_ip:
+            self.subnets = sn_public
         else:
-            self.vpc = aws.ec2.get_vpc(default=True)
-            self.security_group = aws.ec2.SecurityGroup(
-                "zenml-server-sg",
-                description="Security group for ZenML server and metadata store",
-                vpc_id=self.vpc.id,  # must be the VPC where ECS & RDS are
-                egress=[
-                    aws.ec2.SecurityGroupEgressArgs(
-                        protocol="-1",
-                        from_port=0,
-                        to_port=0,
-                        cidr_blocks=["0.0.0.0/0"],  # allow all outbound
-                        description="Allow all outbound traffic",
-                    )
-                ],
-            )
-            aws.ec2.SecurityGroupRule(
-                "zenml-sg-ingress-server",
-                type="ingress",
-                from_port=self.config.server.container_port,
-                to_port=self.config.server.container_port,
-                protocol="tcp",
-                security_group_id=self.security_group.id,
-                cidr_blocks=[f"{my_ip()}/32"],
-            )
-            aws.ec2.SecurityGroupRule(
-                "zenml-sg-ingress-metadata-store",
-                type="ingress",
-                from_port=self.config.metadata_store.port,
-                to_port=self.config.metadata_store.port,
-                protocol="tcp",
-                security_group_id=self.security_group.id,
-                cidr_blocks=[f"{my_ip()}/32"],
-            )
-            sn_public = aws.ec2.get_subnets(
-                filters=[
-                    aws.ec2.GetSubnetsFilterArgs(
-                        name="vpc-id",
-                        values=[self.vpc.id],
-                    ),
-                    aws.ec2.GetSubnetsFilterArgs(
-                        name="map-public-ip-on-launch",
-                        values=["true"],
-                    ),
-                ]
-            )
+            self.subnets = sn_private
 
-            sn_private = aws.ec2.get_subnets(
-                filters=[
-                    aws.ec2.GetSubnetsFilterArgs(
-                        name="vpc-id",
-                        values=[self.vpc.id],
-                    ),
-                    aws.ec2.GetSubnetsFilterArgs(
-                        name="map-public-ip-on-launch",
-                        values=["false"],
-                    ),
-                ]
-            )
-            if self.config.server.service_assign_public_ip:
-                self.subnets = sn_public
-            else:
-                self.subnets = sn_private
-
-    def create_metadata_store(self):
+    def create_metadata_store(self, network_stack: NetworkStack):
         self.metadata_store = aws.rds.Instance(
             "zenml-metadata-store",
             **self.config.metadata_store.model_dump(),
-            vpc_security_group_ids=[self.security_group.id],
+            vpc_security_group_ids=[network_stack.security_group.id],
             opts=pulumi.ResourceOptions(parent=self),
         )
 
@@ -187,7 +159,7 @@ class ZenMLDeployment(ComponentResource):
             opts=pulumi.ResourceOptions(parent=self.metadata_store_secret),
         )
 
-    def create_server(self, zenml_remote_stack: ZenMLRemoteStack):
+    def create_server(self, network_stack: NetworkStack, zenml_stack: ZenMLAWSStack):
         # --- roles
         # execution role
         execution_role = aws.iam.Role(
@@ -278,10 +250,8 @@ class ZenMLDeployment(ComponentResource):
                             "s3:ListBucket",
                         ],
                         resources=[
-                            zenml_remote_stack.artifact_store.arn.apply(lambda x: x),
-                            zenml_remote_stack.artifact_store.arn.apply(
-                                lambda x: f"{x}/*"
-                            ),
+                            zenml_stack.artifact_store.arn.apply(lambda x: x),
+                            zenml_stack.artifact_store.arn.apply(lambda x: f"{x}/*"),
                         ],
                         sid="ZenMLArtifactStorageReadWrite",
                     )
@@ -343,8 +313,8 @@ class ZenMLDeployment(ComponentResource):
             launch_type="FARGATE",
             network_configuration=aws.ecs.ServiceNetworkConfigurationArgs(
                 assign_public_ip=self.config.server.service_assign_public_ip,
-                subnets=self.subnets.ids,
-                security_groups=[self.security_group.id],
+                subnets=network_stack.subnets.ids,
+                security_groups=[network_stack.security_group.id],
             ),
             desired_count=1,
             opts=pulumi.ResourceOptions(parent=self),
@@ -352,7 +322,6 @@ class ZenMLDeployment(ComponentResource):
 
     def export_outputs(self):
         pulumi.export("zenml-deployment-metadata-store-arn", self.metadata_store.arn)
-        pulumi.export("zenml-deployment-metadata-store-urn", self.metadata_store.urn)
         pulumi.export(
             "zenml-deployment-metadata-store-username", self.metadata_store.username
         )
@@ -364,7 +333,7 @@ class ZenMLDeployment(ComponentResource):
         )
         pulumi.export("zenml-deployment-server-cluster-arn", self.server_cluster.arn)
         pulumi.export(
-            "zenml-deployment-server-task-definition-urn",
+            "zenml-deployment-server-task-definition-arn",
             self.server_task_definition.arn,
         )
-        pulumi.export("zenml-deployment-server-service-urn", self.server_service.arn)
+        pulumi.export("zenml-deployment-server-service-arn", self.server_service.arn)

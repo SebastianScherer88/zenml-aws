@@ -5,6 +5,7 @@ description = "A collection of AWS integrations for the zenml platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "typer>=0.20.0",
     "zenml>=0.91.0",
 ]
 
