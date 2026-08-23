@@ -45,11 +45,11 @@ from zenml_aws.constants import (
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchJobStatus,
 )
-from zenml_aws.schema import AWSBatchStepStepMetadata
-from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+from zenml_aws.flavors.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorConfig,
     AWSBatchStepOperatorSettings,
 )
+from zenml_aws.schema import AWSBatchStepStepMetadata
 
 logger = get_logger(__name__)
 
@@ -195,7 +195,7 @@ class AWSBatchStepOperator(BaseStepOperator):
     def submit_job(
         self,
         batch_client,
-        job_definition_name: str,
+        job_definition: AWSBatchJobDefinition,
         info: StepRunInfo,
     ) -> tuple[str, str]:
         """Submits the AWS Batch job that implements this zenml pipeline step.
@@ -216,11 +216,12 @@ class AWSBatchStepOperator(BaseStepOperator):
         step_settings = cast(AWSBatchStepOperatorSettings, self.get_settings(info))
 
         response = batch_client.submit_job(
-            jobName=job_definition_name,
+            jobName=job_definition.jobDefinitionName,
             jobQueue=step_settings.job_queue_name
             if step_settings.job_queue_name
             else self.config.job_queue_name,
-            jobDefinition=job_definition_name,
+            jobDefinition=job_definition.jobDefinitionName,
+            tags=job_definition.tags,
         )
 
         job_id = response["jobId"]
@@ -318,9 +319,9 @@ class AWSBatchStepOperator(BaseStepOperator):
             )
 
         # submit AWS Batch job
-        job_id, job_arn = self.submit_job(
-            batch_client, unique_batch_job_definition_name, info
-        )
+        job_id, job_arn = self.submit_job(batch_client, batch_job_definition, info)
+
+        step_settings: AWSBatchStepOperatorSettings = self.get_settings(info)
 
         # update step metadata
         log_metadata(
@@ -329,7 +330,8 @@ class AWSBatchStepOperator(BaseStepOperator):
             metadata={
                 "AWS Batch": AWSBatchStepStepMetadata.from_arns(
                     job_definition_arn,
-                    self.config.backend.lower(),
+                    step_settings.backend.lower(),
+                    step_settings.job_queue_name,
                     job_arn,
                 ).model_dump(),
             },

@@ -1,3 +1,8 @@
-name: zenml-aws-batch-test
-description: A minimal AWS stack for e2e testing of the AWS Batch step operator for the zenml library
+name: zenml-aws
+description: >
+  AWS stack for a self-hosted ZenML OSS deployment: ZenML server (API + dashboard)
+  on ECS Fargate behind an ALB restricted to developer IPs, MySQL metadata store on
+  RDS (reachable only from the ECS task, never from developers directly), an S3
+  artifact store, an ECR repo for pipeline/step images, and AWS Batch compute
+  resources for the Batch step operator / orchestrator.
 runtime: python

@@ -16,9 +16,11 @@ from pydantic import (
     field_validator,
     model_serializer,
 )
+from zenml.client import Client
 from zenml.config import ResourceSettings
 from zenml.config.step_configurations import Step
 from zenml.config.step_run_info import StepRunInfo
+from zenml.constants import METADATA_ORCHESTRATOR_RUN_ID
 from zenml.entrypoints import StepEntrypointConfiguration
 from zenml.logger import get_logger
 from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
@@ -26,18 +28,16 @@ from zenml.orchestrators import ContainerizedOrchestrator
 from zenml.step_operators import BaseStepOperator
 
 from zenml_aws.constants import (
-    AWS_BATCH_JOB_DEFAULT_NAME,
-    AWS_BATCH_STEP_OPERATOR_FLAVOR,
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchTag,
 )
-from zenml_aws.orchestrator.aws_stepfunctions_batch_orchestrator_flavor import (
-    AWSStepFunctionsOrchestratorConfig,
-    AWSStepFunctionsOrchestratorSettings,
-)
-from zenml_aws.step_operator.aws_batch_step_operator_flavor import (
+from zenml_aws.flavors.aws_batch_step_operator_flavor import (
     AWSBatchStepOperatorConfig,
     AWSBatchStepOperatorSettings,
+)
+from zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor import (
+    AWSStepFunctionsOrchestratorConfig,
+    AWSStepFunctionsOrchestratorSettings,
 )
 
 logger = get_logger(__name__)
@@ -94,21 +94,6 @@ class AWSBatchJobDefinitionContainerProperties(BaseModel):
 class AWSBatchJobDefinitionEC2ContainerProperties(
     AWSBatchJobDefinitionContainerProperties
 ):
-    # logConfiguration: dict[
-    #     Literal["logDriver"],
-    #     Literal[
-    #         "awsfirelens",
-    #         "awslogs",
-    #         "fluentd",
-    #         "gelf",
-    #         "json-file",
-    #         "journald",
-    #         "logentries",
-    #         "syslog",
-    #         "splunk",
-    #     ],
-    # ] = {"logDriver": "awslogs"}
-
     @field_validator("resourceRequirements")
     def check_resource_requirements(
         cls, resource_requirements: List[ResourceRequirement]
@@ -213,7 +198,7 @@ class AWSBatchJobDefinition(BaseModel):
     """A utility to validate AWS Batch job descriptions. Base class
     for container and multinode job definition types."""
 
-    jobDefinitionName: str = AWS_BATCH_JOB_DEFAULT_NAME
+    jobDefinitionName: str = ""
     type: str = "container"
     containerProperties: (
         AWSBatchJobDefinitionEC2ContainerProperties
@@ -235,6 +220,7 @@ class AWSBatchJobDefinition(BaseModel):
     def from_orchestrator(
         cls,
         orchestrator: ContainerizedOrchestrator,  # | "AWSBatchOrchestrator",
+        orchestrator_run_id: str,
         step: Step,
         placeholder_run: PipelineRunResponse,
         environment: Dict[str, str],
@@ -266,32 +252,35 @@ class AWSBatchJobDefinition(BaseModel):
         # NOTE: This means that for step level AWS Batch configurations, a
         # registered aws_batch flavour step_operator component is required in
         # the stack and the pipeline.
-        step_operator_settings: AWSBatchStepOperatorSettings | None = (
-            step.config.settings.get(
-                f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
-            )
-        )
         pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
+        step_settings: (
+            AWSBatchStepOperatorSettings | AWSStepFunctionsOrchestratorSettings
+        ) = orchestrator.get_step_settings(step.config.name, placeholder_run.snapshot)
         pipeline_settings: AWSStepFunctionsOrchestratorSettings = (
             orchestrator.get_settings(placeholder_run.snapshot)
         )
-
         # meta data tags
+        client = Client()
         tags: dict[str, str] = cls.generate_tags(
-            placeholder_run=placeholder_run, step_name=step.config.name
+            stack_id=str(client.active_stack.id),
+            stack_name=client.active_stack.name,
+            component_id=str(orchestrator.id),
+            component_name=orchestrator.name,
+            placeholder_run=placeholder_run,
+            step_name=step.config.name,
         )
         # we always apply the stepfunction orchestrator tags
         tags.update(pipeline_settings.tags)
 
-        if step_operator_settings is None:
-            applied_settings = pipeline_settings
-            timeout_seconds = applied_settings.timeout_seconds_step
+        if isinstance(step_settings, AWSStepFunctionsOrchestratorSettings):
+            timeout_seconds = step_settings.timeout_seconds_step
         else:
-            applied_settings = step_operator_settings
-            timeout_seconds = applied_settings.timeout_seconds
+            timeout_seconds = step_settings.timeout_seconds
             # step operator tags will overwrite orchestrator tags for shared
             # keys
-            tags.update(applied_settings.tags)
+            tags.update(step_settings.tags)
+
+        tags.update({METADATA_ORCHESTRATOR_RUN_ID: orchestrator_run_id})
 
         container_kwargs = {
             "logConfiguration": {
@@ -299,22 +288,22 @@ class AWSBatchJobDefinition(BaseModel):
                 "options": {
                     "awslogs-group": pipeline_config.batch_log_group,
                     "awslogs-region": pipeline_config.region,
-                    "awslogs-stream-prefix": f"orchestrator/{placeholder_run.orchestrator_run_id}/",
+                    "awslogs-stream-prefix": f"orchestrator/{orchestrator_run_id}",
                 },
             }
         }
 
-        if applied_settings.backend == "EC2":
+        if step_settings.backend == "EC2":
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
             AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
 
-        elif applied_settings.backend == "FARGATE":
+        elif step_settings.backend == "FARGATE":
             AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
             )
             container_kwargs["networkConfiguration"] = {
-                "assignPublicIp": applied_settings.assign_public_ip
+                "assignPublicIp": step_settings.assign_public_ip
             }
 
         return AWSBatchJobDefinitionClass(
@@ -351,7 +340,15 @@ class AWSBatchJobDefinition(BaseModel):
 
         # if the step's settings include tags, update the system tags before
         # submitting
-        tags = cls.generate_tags(info)
+        client = Client()
+
+        tags = cls.generate_tags(
+            stack_id=str(client.active_stack.id),
+            stack_name=client.active_stack.name,
+            component_id=str(step_operator.id),
+            component_name=step_operator.name,
+            info=info,
+        )
         tags.update(step_settings.tags)
 
         container_kwargs = {
@@ -397,6 +394,10 @@ class AWSBatchJobDefinition(BaseModel):
 
     @staticmethod
     def generate_tags(
+        stack_id: str,
+        stack_name: str,
+        component_id: str,
+        component_name: str,
         info: StepRunInfo | None = None,
         placeholder_run: PipelineRunResponse | None = None,
         step_name: str | None = None,
@@ -406,35 +407,55 @@ class AWSBatchJobDefinition(BaseModel):
         respectively.
 
         Args:
+            stack_id (str): The id of the active zenml stack.
+            stack_name (str): The name of the active zenml stack.
+            component_id (str): The id of the zenml-aws component generating
+                this tag set
+            component_name (str): The name of the zenml-aws component generating
+                this tag set
             info (StepRunInfo | None, optional): The StepRunInfo object passed
-            to the custom step operator's `launch` method. If provided, used to
-            generate step level tags for the step operator AWS resources.
+                to the custom step operator's `launch` method. If provided,
+                used to generate step level tags for the step operator AWS
+                resources.
             placeholder_run (PipelineRunResponse | None, optional): The
-            PipelineRunResponse object passed to the custom orchestrator's
-            `submit_pipeline` method. Only used if no `info` argument is
-            provided.
+                PipelineRunResponse object passed to the custom orchestrator's
+                `submit_pipeline` method. Only used if no `info` argument is
+                provided.
             step_name (str | None, optional): The name of the step. Defaults to
-             None. Only used if no `info` argument is
-            provided.
+                None. Only used if no `info` argument is provided.
 
         Returns:
             dict[str, str]: A dictionary of zenml run meta data tags
         """
+
+        tags = {
+            AWSBatchTag.stack_id: stack_id,
+            AWSBatchTag.stack_name: stack_name,
+            AWSBatchTag.component_id: component_id,
+            AWSBatchTag.component_name: component_name,
+        }
+
         if info is not None:
-            return {
-                AWSBatchTag.pipeline_name: info.pipeline.name,
-                AWSBatchTag.pipeline_run_id: str(info.run_id),
-                AWSBatchTag.pipeline_run_name: info.run_name,
-                AWSBatchTag.step_name: info.pipeline_step_name,
-                AWSBatchTag.step_run_id: str(info.step_run_id),
-            }
+            tags.update(
+                {
+                    AWSBatchTag.pipeline_name: info.pipeline.name,
+                    AWSBatchTag.pipeline_run_id: str(info.run_id),
+                    AWSBatchTag.pipeline_run_name: info.run_name,
+                    AWSBatchTag.step_name: info.pipeline_step_name,
+                    AWSBatchTag.step_run_id: str(info.step_run_id),
+                }
+            )
         else:
-            return {
-                AWSBatchTag.pipeline_name: placeholder_run.pipeline.name,
-                AWSBatchTag.pipeline_run_id: str(placeholder_run.id),
-                AWSBatchTag.pipeline_run_name: placeholder_run.name,
-                AWSBatchTag.step_name: step_name,
-            }
+            tags.update(
+                {
+                    AWSBatchTag.pipeline_name: placeholder_run.pipeline.name,
+                    AWSBatchTag.pipeline_run_id: str(placeholder_run.id),
+                    AWSBatchTag.pipeline_run_name: placeholder_run.name,
+                    AWSBatchTag.step_name: step_name,
+                }
+            )
+
+        return tags
 
     def generate_name(self, pipeline_name: str, step_name: str) -> str:
         """Utility to generate a unique AWS Batch job name.
@@ -523,7 +544,13 @@ def map_environment(environment: Dict[str, str]) -> List[Dict[str, str]]:
         The mapped environment variable specification
     """
 
-    return [{"name": k, "value": v} for k, v in environment.items()]
+    environment.pop("ZENML_STORE_URL")
+    environment.pop("ZENML_STORE_USERNAME")
+    environment.pop("ZENML_STORE_PASSWORD")
+
+    return [{"name": k, "value": v} for k, v in environment.items()] + [
+        {"name": "ZENML_STORE_URL", "value": "http://metadata.zenml.local:8080"}
+    ]
 
 
 def map_resource_settings(
@@ -641,5 +668,6 @@ def register_new_batch_job_definition(
         )
         return batch_job_definition_arn
     else:
-        logger.error(f"Could not register new AWS Batch job definition: {response}")
-        return None
+        raise RuntimeError(
+            f"Could not register new AWS Batch job definition: {response}"
+        )
