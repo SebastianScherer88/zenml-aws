@@ -544,7 +544,13 @@ def map_environment(environment: Dict[str, str]) -> List[Dict[str, str]]:
         The mapped environment variable specification
     """
 
-    return [{"name": k, "value": v} for k, v in environment.items()]
+    environment.pop("ZENML_STORE_URL")
+    environment.pop("ZENML_STORE_USERNAME")
+    environment.pop("ZENML_STORE_PASSWORD")
+
+    return [{"name": k, "value": v} for k, v in environment.items()] + [
+        {"name": "ZENML_STORE_URL", "value": "http://metadata.zenml.local:8080"}
+    ]
 
 
 def map_resource_settings(

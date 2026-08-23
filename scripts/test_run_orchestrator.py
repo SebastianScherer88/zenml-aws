@@ -10,7 +10,7 @@ from zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor import (
 )
 
 docker_settings = DockerSettings(
-    parent_image="743582000746.dkr.ecr.eu-west-1.amazonaws.com/zenml:latest",
+    parent_image="743582000746.dkr.ecr.eu-west-1.amazonaws.com/zenml-aws-zenml:latest",
     skip_build=True,
 )
 
@@ -40,17 +40,20 @@ def test_pipeline(name: str):
 @click.option("--backend", type=click.Choice(["FARGATE", "EC2"]), default="EC2")
 @click.option("--cpu", type=click.IntRange(1, 5), default=1)
 @click.option("--memory", type=click.IntRange(100, 5000), default=1000)
+@click.option("--gpu", type=click.IntRange(0, 5), default=0)
 @click.option(
     "--job-queue",
-    type=click.Choice(["zenml-test-ec2-job-queue", "zenml-test-fargate-job-queue"]),
-    default="zenml-test-ec2-job-queue",
+    type=click.Choice(["zenml-aws-ec2-queue", "zenml-aws-fargate-queue"]),
+    default="zenml-aws-ec2-queue",
 )
-def main(backend: str, cpu: str, memory: str, job_queue: str):
+def main(backend: str, cpu: int, memory: str, gpu: int, job_queue: str):
     click.echo(f"{backend}, {cpu}, {memory}, {job_queue}")
 
     pipeline_settings = {
         "resources": ResourceSettings(
-            cpu_count=cpu, memory=f"{memory}MiB"
+            cpu_count=cpu,
+            memory=f"{memory}MiB",
+            gpu_count=gpu,
         ).model_dump(),
         "orchestrator": AWSStepFunctionsOrchestratorSettings(tags={"test-d": "D"}),
     }

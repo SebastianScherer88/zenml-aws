@@ -24,6 +24,7 @@ from boto3 import Session
 from zenml import log_metadata
 from zenml.client import Client
 from zenml.config.base_settings import BaseSettings
+from zenml.config.step_configurations import Step
 from zenml.config.step_run_info import StepRunInfo
 from zenml.constants import (
     METADATA_ORCHESTRATOR_RUN_ID,
@@ -408,6 +409,36 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             cause="Cancelling execution via script",
         )
 
+    def get_aws_batch_component_settings(
+        self, step_name: str, snapshot: PipelineSnapshotResponse
+    ) -> AWSBatchStepOperatorSettings | None:
+        """Dedicated utility to retrieve settings from any aws_batch flavour step_operator
+        component registered with the stack. Necessary since the 0.94.3 release changed the way
+        settings keys are normalized to use "step_operator:{component_name}" instead
+         of the previous "step_operator.{component_flavour}, and allowed for more than one step operator
+         component registered with the stack."""
+
+        step: Step = snapshot.step_configurations[step_name]
+
+        stack = Client().get_stack(snapshot.stack.id)
+
+        aws_batch_step_operator_components = [
+            step_operator_component
+            for step_operator_component in stack.components.get(
+                StackComponentType.STEP_OPERATOR
+            )
+            if step_operator_component.flavor_name == AWS_BATCH_STEP_OPERATOR_FLAVOR
+        ]
+
+        for aws_batch_step_operator_component in aws_batch_step_operator_components:
+            key = f"step_operator:{aws_batch_step_operator_component.name}"
+            settings = step.config.settings.get(key)
+
+            if settings is not None:
+                return settings
+
+        return None
+
     def get_step_settings(
         self, step_name: str, snapshot: PipelineSnapshotResponse
     ) -> AWSBatchStepOperatorSettings | AWSStepFunctionsOrchestratorSettings:
@@ -423,10 +454,8 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             None | AWSBatchStepOperatorSettings: _description_
         """
 
-        step = snapshot.step_configurations[step_name]
-
-        step_settings: AWSBatchStepOperatorSettings | None = step.config.settings.get(
-            f"step_operator.{AWS_BATCH_STEP_OPERATOR_FLAVOR}", None
+        step_settings = self.get_aws_batch_component_settings(
+            step_name=step_name, snapshot=snapshot
         )
 
         if step_settings is None:
