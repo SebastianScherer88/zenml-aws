@@ -10,21 +10,25 @@ Contains:
 
 ![The remote components](image/aws-components.png)
 
-# Setup
+## Setup
 
+Use the included devcontainer specs to spin up the devcontainer in VS Code.
 
-## Python dependencies
+As seen in the `.devcontainer/devcontainer.json` configuration, it relies on an
+ AWS profile called `pulumi`, and a credentials file linked to said profile:
 
-Create a virtual environment with python 3.12:
-
-```bash
-uv venv --python=3.12
-```
-
-and activate it. Then install all python dependencies:
-
-```bash
-uv sync
+ ```json
+ ...
+   "remoteEnv": {
+    "AWS_PROFILE": "pulumi",
+    "AWS_REGION": "eu-west-1",
+    "AWS_PAGER": "",
+  },
+  "mounts": [
+    "source=${localEnv:USERPROFILE}/.aws,target=/root/.aws,type=bind",
+    "source=.metaflowconfig,target=/root/.metaflowconfig,type=bind"
+  ],
+...
 ```
 
 ## Infrastructure
@@ -66,6 +70,10 @@ source export-pulumi-outputs.sh
 This will export the pulumi stack outputs to environment variables.
 
 ## Docker image
+
+> [!NOTE]
+> You will need to run this section outside of the dev container as it does
+> not currently support the building of docker images
 
 To authenticate your local docker client with the remote ECR stack you just
 provisioned, run:
@@ -114,10 +122,18 @@ zenml artifact-store register aws-s3 -f s3 --path=${ARTIFACT_STORE_S3_BUCKET}
 
 ### Batch Step Operator
 
+To register a `test-step-operator` zenml stack containing
+- an `s3` flavour artifact store component `aws-s3`
+- an `aws` flavour container registry component `aws`
+- a `aws_batch` flavour step operator component `aws-batch`
+- the `default` flavour orchestrator component
+
+run:
+
 ```bash
 zenml step-operator flavor register zenml_aws.flavors.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
 zenml step-operator register aws-batch -f aws_batch --execution_role=${BATCH_EXECUTION_ROLE_ARN} --job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=${AWS_PROFILE} --delete_resources_on="[\"SUCCEEDED\"]" --log_group=${LOG_GROUP_NAME}
-zenml stack register test-step-operator -a default -o default -c aws-ecr -s aws-batch -a aws-s3
+zenml stack register test-step-operator -o default -c aws-ecr -s aws-batch -a aws-s3
 zenml stack set test-step-operator
 ```
 
@@ -137,16 +153,24 @@ zenml step-operator flavor delete aws_batch
 
 ### Stepfunctions Orchestrator
 
+To register a `test-orchestrator` zenml stack containing
+- an `s3` flavour artifact store component `aws-s3`
+- an `aws` flavour container registry component `aws`
+- a `aws_batch` flavour step operator component `aws-batch`
+- a `aws_stepfunctions` flavour orchestrator component `aws-stepfunctions`,
+
+run:
+
 ```bash
 zenml step-operator flavor register zenml_aws.flavors.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
 zenml step-operator register aws-batch -f aws_batch --execution_role=${BATCH_EXECUTION_ROLE_ARN} --job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=${AWS_PROFILE} --delete_resources_on="[\"SUCCEEDED\"]" --log_group=${LOG_GROUP_NAME}
 zenml orchestrator flavor register zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
 zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=${SFN_EXECUTION_ROLE_ARN} --batch_execution_role=${BATCH_EXECUTION_ROLE_ARN} --batch_job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test-2\": \"orchestrator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=${AWS_PROFILE} --delete_stepfunctions_resource_on="[]" --batch_log_group=${LOG_GROUP_NAME} --stepfunctions_log_group_arn=${LOG_GROUP_ARN}
-zenml stack register test-orchestrator -a default -o aws-stepfunctions -c aws-ecr -a aws-s3 -s aws-batch
+zenml stack register test-orchestrator -o aws-stepfunctions -c aws-ecr -a aws-s3 -s aws-batch
 zenml stack set test-orchestrator
 ```
 
-![Our test-orchestrator zenml stack](test-orchestrator-stack.png)
+![Our test-orchestrator zenml stack](image/test-orchestrator-stack.png)
 
 ![The AWS Stepfunctions orchestrator component](image/aws-stepfunctions-orchestrator-component.png)
 
