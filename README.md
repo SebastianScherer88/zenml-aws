@@ -57,20 +57,28 @@ cd infrastructure
 pulumi up -y
 ```
 
+The run
+
+```bash
+source export-pulumi-outputs.sh
+```
+
+This will export the pulumi stack outputs to environment variables.
+
 ## Docker image
 
 To authenticate your local docker client with the remote ECR stack you just
 provisioned, run:
 
 ```bash
-aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin 743582000746.dkr.ecr.eu-west-1.amazonaws.com
+aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY_URI}
 ```
 
 To build a zenml docker image that can run remotely, run:
 
 ```bash
-docker build -f infrastructure\docker\component\Dockerfile . -t 743582000746.dkr.ecr.eu-west-1.amazonaws.com/zenml-aws-zenml:latest
-docker push 743582000746.dkr.ecr.eu-west-1.amazonaws.com/zenml-aws-zenml:latest
+docker build -f infrastructure\docker\component\Dockerfile . -t ${ECR_REPOSITORY_URL}:latest
+docker push ${ECR_REPOSITORY_URL}:latest
 ```
 
 ## Zenml `step-operator` and `orchestrator` test stack
@@ -81,7 +89,7 @@ commands.
 Login with the remote SQL zenml store directly:
 
 ```bash
-zenml login http://zenml-aws-alb-1ee2b1a-1330445230.eu-west-1.elb.amazonaws.com:8080
+zenml login ${SERVER_EXTERNAL_URL}
 ```
 
 Register the git repository as a local zenml repository:
@@ -90,46 +98,61 @@ Register the git repository as a local zenml repository:
 zenml init
 ```
 
+The username is `default`, and the password is the key `default_user_password` from the `zenml-aws-server-secret-...` secret
+
 Register a remote type ECR contaier registry component:
 
 ```bash
-zenml container-registry register aws-ecr -f aws --uri=743582000746.dkr.ecr.eu-west-1.amazonaws.com
+zenml container-registry register aws-ecr -f aws --uri=${ECR_REGISTRY_URI}
 ```
 
 Register a remote type S3 artifact store component:
 
 ```bash
-zenml artifact-store register aws-s3 -f s3 --path=s3://zenml-artifact-store-29182ff
+zenml artifact-store register aws-s3 -f s3 --path=${ARTIFACT_STORE_S3_BUCKET}
 ```
 
 ### Batch Step Operator
+
+```bash
+zenml step-operator flavor register zenml_aws.flavors.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
+zenml step-operator register aws-batch -f aws_batch --execution_role=${BATCH_EXECUTION_ROLE_ARN} --job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=${AWS_PROFILE} --delete_resources_on="[\"SUCCEEDED\"]" --log_group=${LOG_GROUP_NAME}
+zenml stack register test-step-operator -a default -o default -c aws-ecr -s aws-batch -a aws-s3
+zenml stack set test-step-operator
+```
+
+![Our test-step-operator zenml stack](image/test-step-operator-stack.png)
+
+![The AWS Batch step operator component](image/aws-batch-step-operator-component.png)
+
+To remove this stack, remove the step operator component and unregister the
+ `aws_batch` step operator flavour, run
 
 ```bash
 zenml stack set default
 zenml stack delete test-step-operator -y
 zenml step-operator delete aws-batch
 zenml step-operator flavor delete aws_batch
-zenml step-operator flavor register zenml_aws.flavors.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
-zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/zenml-aws-batch-execution-role-4302e48 --job_role=arn:aws:iam::743582000746:role/zenml-aws-batch-job-role-61b3202 --job_queue_name=zenml-aws-fargate-queue --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=pulumi --delete_resources_on="[\"SUCCEEDED\"]" --log_group=zenml-aws-logs-1c511f1
-zenml stack register test-step-operator -a default -o default -c aws-ecr -s aws-batch -a aws-s3
-zenml stack set test-step-operator
 ```
-
-![AWS Step operator component](image/step-operator-component.png)
-
-For end-to-end tests running on the provisioned AWS infrastructure, run the 
-test scripts in the `scripts` directory:
-
-```bash
-zenml stack set test-step-operator
-python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-aws-ec2-queue --memory 1000
-python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-aws-ec2-queue --memory 1000 --gpu 1
-python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-aws-fargate-queue --memory 2048
-```
-
-![A pipeline using the AWS Batch step operator](image/batch-step-operator-step.png)
 
 ### Stepfunctions Orchestrator
+
+```bash
+zenml step-operator flavor register zenml_aws.flavors.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
+zenml step-operator register aws-batch -f aws_batch --execution_role=${BATCH_EXECUTION_ROLE_ARN} --job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=${AWS_PROFILE} --delete_resources_on="[\"SUCCEEDED\"]" --log_group=${LOG_GROUP_NAME}
+zenml orchestrator flavor register zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
+zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=${SFN_EXECUTION_ROLE_ARN} --batch_execution_role=${BATCH_EXECUTION_ROLE_ARN} --batch_job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test-2\": \"orchestrator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=${AWS_PROFILE} --delete_stepfunctions_resource_on="[]" --batch_log_group=${LOG_GROUP_NAME} --stepfunctions_log_group_arn=${LOG_GROUP_ARN}
+zenml stack register test-orchestrator -a default -o aws-stepfunctions -c aws-ecr -a aws-s3 -s aws-batch
+zenml stack set test-orchestrator
+```
+
+![Our test-orchestrator zenml stack](test-orchestrator-stack.png)
+
+![The AWS Stepfunctions orchestrator component](image/aws-stepfunctions-orchestrator-component.png)
+
+To remove this stack, remove the step operator and orchestrator components and
+ unregister the `aws_batch` step operator flavour and the `aws_stepfunctions`
+  orchestrator flavour, run
 
 ```bash
 zenml stack set default
@@ -138,39 +161,7 @@ zenml step-operator delete aws-batch
 zenml step-operator flavor delete aws_batch
 zenml orchestrator delete aws-stepfunctions
 zenml orchestrator flavor delete aws_stepfunctions
-zenml step-operator flavor register zenml_aws.flavors.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
-zenml step-operator register aws-batch -f aws_batch --execution_role=arn:aws:iam::743582000746:role/zenml-aws-batch-execution-role-4302e48 --job_role=arn:aws:iam::743582000746:role/zenml-aws-batch-job-role-61b3202 --job_queue_name=zenml-aws-fargate-queue --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=pulumi --delete_resources_on="[\"SUCCEEDED\"]" --log_group=zenml-aws-logs-1c511f1
-zenml orchestrator flavor register zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
-zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=arn:arn:aws:iam::743582000746:role/zenml-aws-sfn-role-ad330c2 --batch_execution_role=arn:aws:iam::743582000746:role/zenml-aws-batch-execution-role-4302e48 --batch_job_role=arn:aws:iam::743582000746:role/zenml-aws-batch-job-role-61b3202 --job_queue_name=zenml-aws-fargate-queue --backend=FARGATE --tags="{\"test-2\": \"orchestrator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=pulumi --delete_stepfunctions_resource_on="[]" --batch_log_group=zenml-aws-logs-1c511f1 --stepfunctions_log_group_arn=arn:aws:logs:eu-west-1:743582000746:log-group:zenml-aws-logs-1c511f1:*
-zenml stack register test-orchestrator -a default -o aws-stepfunctions -c aws-ecr -a aws-s3 -s aws-batch
-zenml stack set test-orchestrator
 ```
-
-![AWS Stepfunctions component](image/stepfunctions-component.png)
-
-For end-to-end tests running on the provisioned AWS infrastructure, run the 
-test scripts in the `scripts` directory:
-
-```bash
-zenml stack set test-orchestrator
-python scripts/test_run_orchestrator.py --backend EC2 --job-queue zenml-aws-ec2-queue --memory 1000
-python scripts/test_run_orchestrator.py --backend EC2 --job-queue zenml-aws-ec2-queue --memory 1000 --gpu 1
-python scripts/test_run_orchestrator.py --backend FARGATE --job-queue zenml-aws-fargate-queue --memory 2048
-```
-
-![A pipeline using the AWS Stepfunctions orchestrator](image/stepfunctions-orchestrator-pipeline.png)
-
-## Zenml dashboard (optional)
-
-It can be useful to track the state of stacks and pipelines via the zenml
-dashboard running independently against the same SQL zenml store:
-
-```bash
-cd infrastructure
-docker compose up
-```
-
-The username is `default`, and the password is empty.
 
 ## Tests
 
@@ -182,4 +173,26 @@ pytest tests/unit -vv # unit tests
 pytest tests/integration -vv # integration tests
 ```
 
-For end-to-end tests, see the sections above.
+For end-to-end testing of the `aws_batch` flavour step-operator on the provisioned AWS infrastructure, run the 
+test scripts in the `scripts` directory:
+
+```bash
+zenml stack set test-step-operator
+python scripts/test_run_step_operator.py --backend FARGATE --job-queue zenml-aws-fargate-queue --memory 2048
+python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-aws-ec2-queue --memory 1000
+python scripts/test_run_step_operator.py --backend EC2 --job-queue zenml-aws-ec2-queue --memory 1000 --gpu 1
+
+```
+
+![A pipeline using the AWS Batch step operator](image/aws-batch-step-operator-step.png)
+
+For end-to-end testing of the `aws_stepfunctions` orchestrator on the provisioned AWS infrastructure, run the test scripts in the `scripts` directory:
+
+```bash
+zenml stack set test-orchestrator
+python scripts/test_run_orchestrator.py --backend FARGATE --job-queue zenml-aws-fargate-queue --memory 2048
+python scripts/test_run_orchestrator.py --backend EC2 --job-queue zenml-aws-ec2-queue --memory 1000
+python scripts/test_run_orchestrator.py --backend EC2 --job-queue zenml-aws-ec2-queue --memory 1000 --gpu 1
+```
+
+![A pipeline using the AWS Stepfunctions orchestrator](image/aws-stepfunctions-orchestrator-pipeline.png)

@@ -1,5 +1,5 @@
 {
-  "name": "Metaflow AWS Dev",
+  "name": "Zenml AWS Dev",
   "workspaceFolder": "/workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "build": {
@@ -8,12 +8,10 @@
   "remoteEnv": {
     "AWS_PROFILE": "pulumi",
     "AWS_REGION": "eu-west-1",
-    "AWS_PAGER": "",
-    "USERNAME": "metaflow-user"
+    "AWS_PAGER": ""
   },
   "mounts": [
     "source=${localEnv:USERPROFILE}/.aws,target=/root/.aws,type=bind",
-    "source=.metaflowconfig,target=/root/.metaflowconfig,type=bind",
     "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
   ],
   "postCreateCommand": "pulumi login s3://pulumi-state-bucket-20-09-2025 "

@@ -843,7 +843,7 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 "destinations": [
                     {
                         "cloudWatchLogsLogGroup": {
-                            "logGroupArn": self.config.stepfunctions_log_group_arn
+                            "logGroupArn": f"{self.config.stepfunctions_log_group_arn}:*"
                         }
                     }
                 ],
