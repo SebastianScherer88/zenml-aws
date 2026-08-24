@@ -967,3 +967,5 @@ pulumi.export("events_bridge_sfn_role_arn", events_sfn_role.arn)
 # for `zenml` client configuration.
 pulumi.export("rds_internal_endpoint", db_instance.endpoint)
 pulumi.export("rds_secret_arn", db_secret.arn)
+pulumi.export("log_group_name", log_group.name)
+pulumi.export("log_group_arn", log_group.arn)

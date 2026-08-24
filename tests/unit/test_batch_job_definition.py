@@ -23,6 +23,7 @@ def test_map_environment():
     expected = [
         {"name": "key_1", "value": "value_1"},
         {"name": "key_2", "value": "value_2"},
+        {"name": "ZENML_STORE_URL", "value": "http://metadata.zenml.local:8080"},
     ]
 
     assert map_environment(test_environment) == expected

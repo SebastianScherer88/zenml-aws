@@ -3129,7 +3129,7 @@ docker = [
 ]
 infrastructure = [
     { name = "pip" },
-    { name = "pulumi", specifier = ">=3.197.0" },
+    { name = "pulumi", specifier = ">=3.259.0" },
     { name = "pulumi-aws", specifier = ">=7.7.0" },
 ]
 

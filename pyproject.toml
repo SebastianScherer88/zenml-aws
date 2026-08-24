@@ -30,7 +30,7 @@ docker = [
     "aws-profile-manager",
 ]
 infrastructure = [
-    "pulumi>=3.197.0",
+    "pulumi>=3.259.0",
     "pulumi-aws>=7.7.0",
     "pip",
 ]
