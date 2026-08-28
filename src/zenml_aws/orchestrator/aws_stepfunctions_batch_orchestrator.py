@@ -42,7 +42,6 @@ from zenml_aws.aws_batch_job_definition import (
     sanitize_name,
 )
 from zenml_aws.constants import (
-    AWS_BATCH_STEP_OPERATOR_FLAVOR,
     BATCH_JOB_TO_ZENML_EXECUTION_STATUS,
     ENV_ZENML_STEP_FUNCTIONS_JOB_ID,
     ENV_ZENML_STEP_FUNCTIONS_REGION,
@@ -52,9 +51,6 @@ from zenml_aws.constants import (
     AWSBatchJobStatus,
     AWSBatchTag,
     AWSStateMachineExecutionStatus,
-)
-from zenml_aws.flavors.aws_batch_step_operator_flavor import (
-    AWSBatchStepOperatorSettings,
 )
 
 # Custom imports
@@ -200,6 +196,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         return boto_session
 
     def prepare_step_run(self, info: StepRunInfo):
+        """This method runs on the AWS Batch runtime. Our customized version
+        logs metadata for the step."""
+
         logger.warning("Running `prepare_step_run` method.")
 
         try:
@@ -225,7 +224,8 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             step_batch_metadata_static = AWSBatchStepStepMetadataServer(
                 **pipeline_run.run_metadata[f"Step[{step_name}]"]
             )
-            step_settings = self.get_step_settings(step_name, pipeline_run.snapshot)
+            step: Step = pipeline_run.snapshot.step_configurations[step_name]
+            step_settings = self.get_settings(step)
 
             # assemble runtime step batch metadata that includes the job execution
             # information
@@ -409,62 +409,6 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             cause="Cancelling execution via script",
         )
 
-    def get_aws_batch_component_settings(
-        self, step_name: str, snapshot: PipelineSnapshotResponse
-    ) -> AWSBatchStepOperatorSettings | None:
-        """Dedicated utility to retrieve settings from any aws_batch flavour step_operator
-        component registered with the stack. Necessary since the 0.94.3 release changed the way
-        settings keys are normalized to use "step_operator:{component_name}" instead
-         of the previous "step_operator.{component_flavour}, and allowed for more than one step operator
-         component registered with the stack."""
-
-        step: Step = snapshot.step_configurations[step_name]
-
-        stack = Client().get_stack(snapshot.stack.id)
-
-        aws_batch_step_operator_components = [
-            step_operator_component
-            for step_operator_component in stack.components.get(
-                StackComponentType.STEP_OPERATOR
-            )
-            if step_operator_component.flavor_name == AWS_BATCH_STEP_OPERATOR_FLAVOR
-        ]
-
-        for aws_batch_step_operator_component in aws_batch_step_operator_components:
-            key = f"step_operator:{aws_batch_step_operator_component.name}"
-            settings = step.config.settings.get(key)
-
-            if settings is not None:
-                return settings
-
-        return None
-
-    def get_step_settings(
-        self, step_name: str, snapshot: PipelineSnapshotResponse
-    ) -> AWSBatchStepOperatorSettings | AWSStepFunctionsOrchestratorSettings:
-        """Utility to retrieve the step's AWSBatchStepOperatorSettings, if
-        the AWSBatchStepOperator component has been registered in the stack and
-        used for this step. If not, returns the AWSStepfunctionOrchestrator
-        settings of the pipeline.
-
-        Args:
-            snapshot (PipelineSnapshotResponse): _description_
-
-        Returns:
-            None | AWSBatchStepOperatorSettings: _description_
-        """
-
-        step_settings = self.get_aws_batch_component_settings(
-            step_name=step_name, snapshot=snapshot
-        )
-
-        if step_settings is None:
-            step_settings: AWSStepFunctionsOrchestratorSettings = self.get_settings(
-                snapshot
-            )
-
-        return step_settings
-
     def submit_pipeline(
         self,
         snapshot: PipelineSnapshotResponse,
@@ -526,8 +470,8 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                 step=step,
                 placeholder_run=placeholder_run,
                 environment=step_environment,
-                get_image_fn=self.get_image,
             )
+
             unique_batch_job_definition_name = (
                 step_aws_batch_job_definition.generate_name(
                     snapshot.pipeline.name, step_name
@@ -649,7 +593,8 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         else:
             wait_for_completion = None
 
-        step_settings = self.get_step_settings(step_name, snapshot)
+        step: Step = snapshot.step_configurations[step_name]
+        step_settings = self.get_settings(step)
 
         step_meta_data = {
             step_name: {
@@ -757,9 +702,8 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
             }
 
             for step_name in level:
-                # use step settings if AWSBatchStepOperator is configured for
-                # the step, otherwise fall back to orchestrator defaults
-                step_settings = self.get_step_settings(step_name, snapshot)
+                step: Step = snapshot.step_configurations[step_name]
+                step_settings = self.get_settings(step)
 
                 states[state_name]["Branches"].append(
                     {

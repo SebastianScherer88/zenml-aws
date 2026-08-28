@@ -2,9 +2,6 @@ import click
 from zenml import pipeline, step
 from zenml.config import DockerSettings, ResourceSettings
 
-from zenml_aws.flavors.aws_batch_step_operator_flavor import (
-    AWSBatchStepOperatorSettings,
-)
 from zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor import (
     AWSStepFunctionsOrchestratorSettings,
 )
@@ -64,9 +61,10 @@ def main(backend: str, cpu: int, memory: str, gpu: int, job_queue: str):
     pipeline_step_configurations = {
         "greet": {
             "settings": {
-                "step_operator": AWSBatchStepOperatorSettings(
+                "orchestrator": AWSStepFunctionsOrchestratorSettings(
                     job_queue_name=job_queue,
                     backend=backend,
+                    tags={"test-greet": "hello"},
                 ).model_dump(),
             },
             "extra": {"test-e": "E"},
@@ -77,9 +75,10 @@ def main(backend: str, cpu: int, memory: str, gpu: int, job_queue: str):
                 "resources": ResourceSettings(
                     cpu_count=2 * cpu, memory=f"{2*memory}MiB"
                 ),
-                "step_operator.aws_batch": AWSBatchStepOperatorSettings(
+                "orchestrator.aws_stepfunctions": AWSStepFunctionsOrchestratorSettings(
                     job_queue_name=job_queue,
                     backend=backend,
+                    tags={"test-report": "done"},
                 ).model_dump(),
             },
         },

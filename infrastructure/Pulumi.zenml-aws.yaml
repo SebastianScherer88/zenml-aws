@@ -5,7 +5,7 @@ config:
   # This is the ONLY way developers reach the stack — RDS is never exposed.
   # e.g. your home/office IP or a VPN egress range: ["1.2.3.4/32"]
   zenml-aws:security:
-    allowed_cidrs: [103.7.207.238/32] # <-- replace with your dev instance IP/32 before applying
+    allowed_cidrs: [45.150.147.155/32] # <-- replace with your dev instance IP/32 before applying
   # --- ZenML server (app server + dashboard, single container/port) -----
   zenml-aws:server:
     image: docker.io/zenmldocker/zenml-server:0.96.3

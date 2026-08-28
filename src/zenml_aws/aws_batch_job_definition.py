@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 from string import ascii_letters, digits
-from typing import Callable, Dict, List, Literal, cast
+from typing import Dict, List, Literal, cast
 
 from pydantic import (
     BaseModel,
@@ -23,7 +23,7 @@ from zenml.config.step_run_info import StepRunInfo
 from zenml.constants import METADATA_ORCHESTRATOR_RUN_ID
 from zenml.entrypoints import StepEntrypointConfiguration
 from zenml.logger import get_logger
-from zenml.models import PipelineRunResponse, PipelineSnapshotResponse
+from zenml.models import PipelineRunResponse
 from zenml.orchestrators import ContainerizedOrchestrator
 from zenml.step_operators import BaseStepOperator
 
@@ -224,13 +224,10 @@ class AWSBatchJobDefinition(BaseModel):
         step: Step,
         placeholder_run: PipelineRunResponse,
         environment: Dict[str, str],
-        get_image_fn: Callable[[PipelineSnapshotResponse, str], str],
     ) -> "AWSBatchJobDefinition":
         """Utility to instantiate a class instance from the arguments
         accessible inside the AWSStepFunctionsOrchestrator's `submit_pipeline`
         method.."""
-
-        step_resource_settings: ResourceSettings = step.config.resource_settings
 
         # assemble container command
         command = StepEntrypointConfiguration.get_entrypoint_command()
@@ -240,25 +237,15 @@ class AWSBatchJobDefinition(BaseModel):
         )
         command_and_arguments = command + arguments
 
-        # We use the following settings resolution:
-        # 1. Check the step's configuration's `settings` attribute for the
-        #  official "step_operator.aws_batch" key. This will be populated if
-        # - the stack includes a step_operator component of the 'aws_batch'
-        # flavour implemented in this library's `step_operator` module, and
-        # - the step has been configured to use the "aws_batch" flavour step
-        #   operator
-        # 2. If step 1 doesnt yield any settings, we fall back on the
-        # orchestrator's configuration's `settings` attribute.
-        # NOTE: This means that for step level AWS Batch configurations, a
-        # registered aws_batch flavour step_operator component is required in
-        # the stack and the pipeline.
-        pipeline_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
-        step_settings: (
-            AWSBatchStepOperatorSettings | AWSStepFunctionsOrchestratorSettings
-        ) = orchestrator.get_step_settings(step.config.name, placeholder_run.snapshot)
-        pipeline_settings: AWSStepFunctionsOrchestratorSettings = (
-            orchestrator.get_settings(placeholder_run.snapshot)
+        orchestrator_config = cast(
+            AWSStepFunctionsOrchestratorConfig, orchestrator.config
         )
+
+        step: Step = placeholder_run.snapshot.step_configurations[step.config.name]
+        orchestrator_step_settings: AWSStepFunctionsOrchestratorSettings = (
+            orchestrator.get_settings(step)
+        )
+
         # meta data tags
         client = Client()
         tags: dict[str, str] = cls.generate_tags(
@@ -270,15 +257,7 @@ class AWSBatchJobDefinition(BaseModel):
             step_name=step.config.name,
         )
         # we always apply the stepfunction orchestrator tags
-        tags.update(pipeline_settings.tags)
-
-        if isinstance(step_settings, AWSStepFunctionsOrchestratorSettings):
-            timeout_seconds = step_settings.timeout_seconds_step
-        else:
-            timeout_seconds = step_settings.timeout_seconds
-            # step operator tags will overwrite orchestrator tags for shared
-            # keys
-            tags.update(step_settings.tags)
+        tags.update(orchestrator_step_settings.tags)
 
         tags.update({METADATA_ORCHESTRATOR_RUN_ID: orchestrator_run_id})
 
@@ -286,37 +265,43 @@ class AWSBatchJobDefinition(BaseModel):
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
-                    "awslogs-group": pipeline_config.batch_log_group,
-                    "awslogs-region": pipeline_config.region,
+                    "awslogs-group": orchestrator_config.batch_log_group,
+                    "awslogs-region": orchestrator_config.region,
                     "awslogs-stream-prefix": f"orchestrator/{orchestrator_run_id}",
                 },
             }
         }
 
-        if step_settings.backend == "EC2":
+        if orchestrator_step_settings.backend == "EC2":
             AWSBatchJobDefinitionClass = AWSBatchJobEC2Definition
             AWSBatchContainerProperties = AWSBatchJobDefinitionEC2ContainerProperties
 
-        elif step_settings.backend == "FARGATE":
+        elif orchestrator_step_settings.backend == "FARGATE":
             AWSBatchJobDefinitionClass = AWSBatchJobFargateDefinition
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
             )
             container_kwargs["networkConfiguration"] = {
-                "assignPublicIp": step_settings.assign_public_ip
+                "assignPublicIp": orchestrator_step_settings.assign_public_ip
             }
 
         return AWSBatchJobDefinitionClass(
-            timeout={"attemptDurationSeconds": timeout_seconds},
+            timeout={
+                "attemptDurationSeconds": orchestrator_step_settings.timeout_seconds_step
+            },
             type="container",
             tags=tags,
             containerProperties=AWSBatchContainerProperties(
-                executionRoleArn=pipeline_config.batch_execution_role,
-                jobRoleArn=pipeline_config.batch_job_role,
-                image=get_image_fn(placeholder_run.snapshot, step.config.name),
+                executionRoleArn=orchestrator_config.batch_execution_role,
+                jobRoleArn=orchestrator_config.batch_job_role,
+                image=orchestrator.get_image(
+                    placeholder_run.snapshot, step.config.name
+                ),
                 command=command_and_arguments,
                 environment=map_environment(environment),
-                resourceRequirements=map_resource_settings(step_resource_settings),
+                resourceRequirements=map_resource_settings(
+                    step.config.resource_settings
+                ),
                 **container_kwargs,
             ),
         )
@@ -332,11 +317,8 @@ class AWSBatchJobDefinition(BaseModel):
         """Utility to instantiate a class instance from the arguments
         accessible inside the AWSBatchStepOperator's `launch` method.."""
 
-        step_settings = cast(
-            AWSBatchStepOperatorSettings, step_operator.get_settings(info)
-        )
-
-        step_config: AWSBatchStepOperatorConfig = step_operator.config
+        step_settings: AWSBatchStepOperatorSettings = step_operator.get_settings(info)
+        step_operator_config: AWSBatchStepOperatorConfig = step_operator.config
 
         # if the step's settings include tags, update the system tags before
         # submitting
@@ -355,8 +337,8 @@ class AWSBatchJobDefinition(BaseModel):
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
-                    "awslogs-group": step_config.log_group,
-                    "awslogs-region": step_config.region,
+                    "awslogs-group": step_operator_config.log_group,
+                    "awslogs-region": step_operator_config.region,
                     "awslogs-stream-prefix": f"step-operator/{info.step_run_id}",
                 },
             }
@@ -380,8 +362,8 @@ class AWSBatchJobDefinition(BaseModel):
             type="container",
             tags=tags,
             containerProperties=AWSBatchContainerProperties(
-                executionRoleArn=step_config.execution_role,
-                jobRoleArn=step_config.job_role,
+                executionRoleArn=step_operator_config.execution_role,
+                jobRoleArn=step_operator_config.job_role,
                 image=info.get_image(key=BATCH_DOCKER_IMAGE_KEY),
                 command=entrypoint_command,
                 environment=map_environment(environment),
