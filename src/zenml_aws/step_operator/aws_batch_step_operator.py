@@ -42,6 +42,7 @@ from zenml_aws.aws_batch_job_definition import (
 )
 from zenml_aws.constants import (
     _ENTRYPOINT_ENV_VARIABLE,
+    AWS_BATCH_STEP_OPERATOR_FLAVOR,
     BATCH_DOCKER_IMAGE_KEY,
     AWSBatchJobStatus,
 )
@@ -99,29 +100,9 @@ class AWSBatchStepOperator(BaseStepOperator):
                     f"Expected to receive a `boto3.Session` object from the "
                     f"linked connector, but got type `{type(boto_session)}`."
                 )
-        # Option 2: Explicit configuration
-        # Args that are not provided will be taken from the default AWS config.
+        # Option 2: Boto3 resolution chain
         else:
-            boto_session = Session(
-                aws_access_key_id=self.config.aws_access_key_id,
-                aws_secret_access_key=self.config.aws_secret_access_key,
-                region_name=self.config.region,
-                profile_name=self.config.aws_profile,
-            )
-            # If a role ARN is provided for authentication, assume the role
-            if self.config.aws_auth_role_arn:
-                sts = boto_session.client("sts")
-                response = sts.assume_role(
-                    RoleArn=self.config.aws_auth_role_arn,
-                    RoleSessionName="zenml-aws-batch-step-operator",
-                )
-                credentials = response["Credentials"]
-                boto_session = Session(
-                    aws_access_key_id=credentials["AccessKeyId"],
-                    aws_secret_access_key=credentials["SecretAccessKey"],
-                    aws_session_token=credentials["SessionToken"],
-                    region_name=self.config.region,
-                )
+            boto_session = Session()
         return boto_session
 
     @property
@@ -136,25 +117,34 @@ class AWSBatchStepOperator(BaseStepOperator):
         def _validate_remote_components(stack: "Stack") -> Tuple[bool, str]:
             if stack.artifact_store.config.is_local:
                 return False, (
-                    "The Batch step operator runs code remotely and "
-                    "needs to write files into the artifact store, but the "
-                    f"artifact store `{stack.artifact_store.name}` of the "
-                    "active stack is local. Please ensure that your stack "
-                    "contains a remote artifact store when using the Batch "
-                    "step operator."
+                    f"The {AWS_BATCH_STEP_OPERATOR_FLAVOR} step operator "
+                    "flavour runs code remotely and needs to write files into "
+                    "the artifact store, but the artifact store "
+                    f"`{stack.artifact_store.name}` of the active stack is "
+                    "local. Please ensure that your stack contains a remote "
+                    "artifact store when using the "
+                    f"{AWS_BATCH_STEP_OPERATOR_FLAVOR} step operator flavour."
                 )
 
-            container_registry = stack.container_registry
-            assert container_registry is not None
-
-            if container_registry.config.is_local:
+            assert stack.container_registry is not None
+            if stack.container_registry.config.is_local:
                 return False, (
-                    "The Batch step operator runs code remotely and "
-                    "needs to push/pull Docker images, but the "
-                    f"container registry `{container_registry.name}` of the "
-                    "active stack is local. Please ensure that your stack "
-                    "contains a remote container registry when using the "
-                    "Batch step operator."
+                    f"The {AWS_BATCH_STEP_OPERATOR_FLAVOR} step operator "
+                    "flavourruns code remotely and needs to push/pull Docker "
+                    "images, but the container registry "
+                    f"`{stack.container_registry.name}` of the active stack is"
+                    " local. Please ensure that your stack contains a remote "
+                    "container registry when using the "
+                    f"{AWS_BATCH_STEP_OPERATOR_FLAVOR} step operator flavour."
+                )
+
+            if not stack.orchestrator.config.is_local:
+                return False, (
+                    "The Batch step operator requires a local orchestrator, "
+                    f"but the container registry `{stack.orchestrator.name}` "
+                    "of the active stack is local. Please ensure that your "
+                    "stack contains a remote container registry when using the"
+                    f"{AWS_BATCH_STEP_OPERATOR_FLAVOR} step operator flavour."
                 )
 
             return True, ""
@@ -213,13 +203,11 @@ class AWSBatchStepOperator(BaseStepOperator):
                 fails.
         """
 
-        step_settings = cast(AWSBatchStepOperatorSettings, self.get_settings(info))
+        step_settings: AWSBatchStepOperatorSettings = self.get_settings(info)
 
         response = batch_client.submit_job(
             jobName=job_definition.jobDefinitionName,
-            jobQueue=step_settings.job_queue_name
-            if step_settings.job_queue_name
-            else self.config.job_queue_name,
+            jobQueue=step_settings.job_queue_name,
             jobDefinition=job_definition.jobDefinitionName,
             tags=job_definition.tags,
         )

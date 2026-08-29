@@ -15,7 +15,7 @@
 
 from typing import Literal, Optional, Type
 
-from pydantic import Field, PositiveInt
+from pydantic import Field, PositiveInt, model_validator
 from zenml.config.base_settings import BaseSettings
 from zenml.integrations.aws import (
     AWS_RESOURCE_TYPE,
@@ -25,7 +25,6 @@ from zenml.step_operators.base_step_operator import (
     BaseStepOperatorConfig,
     BaseStepOperatorFlavor,
 )
-from zenml.utils.secret_utils import SecretField
 
 from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR, AWSBatchJobStatus
 
@@ -33,29 +32,36 @@ from zenml_aws.constants import AWS_BATCH_STEP_OPERATOR_FLAVOR, AWSBatchJobStatu
 class AWSBatchStepOperatorSettings(BaseSettings):
     """Settings for the Sagemaker step operator."""
 
-    job_queue_name: str = Field(
-        default="",
+    job_queue_name: str | None = Field(
+        default=None,
         description="The AWS Batch job queue to submit the step AWS Batch job"
-        " to. If not provided, falls back to the default job queue name "
-        "specified at stack registration time. Must be compatible with"
+        " to. If not provided, falls back to the default job_queue_name "
+        "specified at component registration time. Must be compatible with"
         "`backend`.",
     )
-    backend: Literal["EC2", "FARGATE"] = Field(
-        default="FARGATE",
-        description="The AWS Batch platform capability for the step AWS Batch "
-        "job to be orchestrated with. Must be compatible with `job_queue_name`."
-        "Defaults to 'FARGATE'.",
+    backend: Literal["EC2", "FARGATE"] | None = Field(
+        default=None,
+        description="The AWS Batch backend for the step AWS Batch job. If not "
+        "provided, falls back to the backend  specified at component "
+        "registration time. Must be compatible with `job_queue_name`.",
+    )
+    execution_role: str | None = Field(
+        default=None,
+        description="The IAM role arn of the AWS Batch's underlying ECS "
+        "execution role. If not provided, falls back to the execution_role "
+        "specified at component registration time.",
+    )
+    job_role: str | None = Field(
+        default=None,
+        description="The IAM role arn of the AWS Batch's underlying ECS task "
+        "role. If not provided, falls back to the job_role specified at "
+        "component registration time.",
     )
     tags: dict[str, str] = Field(
         default=dict(),
         description="The tags for this step's AWS BatchJobDefinition resource."
         "For zenml meta tags added automatically, see the "
         "zenml.constants.AWSBatchTags class.",
-    )
-    assign_public_ip: Literal["ENABLED", "DISABLED"] = Field(
-        default="ENABLED",
-        description="Sets the network configuration's assignPublicIp field."
-        "Only relevant for FARGATE backend.",
     )
     timeout_seconds: PositiveInt = Field(
         default=3600,
@@ -86,38 +92,14 @@ class AWSBatchStepOperatorConfig(BaseStepOperatorConfig, AWSBatchStepOperatorSet
      - we can AWS Batch multinode type job support later, which requires EC2
     """
 
-    execution_role: str = Field(
-        description="The IAM role arn of the ECS execution role."
-    )
-    job_role: str = Field(description="The IAM role arn of the ECS job role.")
     log_group: str = Field(
-        description="The log group for Batch jobs.", default="/aws/batch/job/zenml-aws"
+        description="The log group for AWS Batch jobs.",
+        default="/aws/batch/job/zenml-aws",
     )
-    aws_access_key_id: Optional[str] = SecretField(
-        default=None,
-        description="The AWS access key ID to use to authenticate to AWS. "
-        "If not provided, the value from the default AWS config will be used.",
-    )
-    aws_secret_access_key: Optional[str] = SecretField(
-        default=None,
-        description="The AWS secret access key to use to authenticate to AWS. "
-        "If not provided, the value from the default AWS config will be used.",
-    )
-    aws_profile: Optional[str] = Field(
-        None,
-        description="The AWS profile to use for authentication if not using "
-        "service connectors or explicit credentials. If not provided, the "
-        "default profile will be used.",
-    )
-    aws_auth_role_arn: Optional[str] = Field(
-        None,
-        description="The ARN of an intermediate IAM role to assume when "
-        "authenticating to AWS.",
-    )
-    region: Optional[str] = Field(
-        "eu-west-1",
-        description="The AWS region where the processing job will be run. "
-        "If not provided, the value from the default AWS config will be used.",
+    aws_region: str = Field(
+        description="The AWS region where the processing job will be run. If "
+        "not provided, the standard boto3 resolution chain will be used to "
+        "resolve this value."
     )
 
     @property
@@ -132,6 +114,21 @@ class AWSBatchStepOperatorConfig(BaseStepOperatorConfig, AWSBatchStepOperatorSet
             True if this config is for a remote component, False otherwise.
         """
         return True
+
+    @model_validator(mode="after")
+    def require_aws_iam_fields(self):
+        required_fields = ("job_queue_name", "backend", "execution_role", "job_role")
+        missing_fields = [
+            required_field
+            for required_field in required_fields
+            if not getattr(self, required_field)
+        ]
+        if missing_fields:
+            raise ValueError(
+                f"Missing configuration values for fields {missing_fields} for"
+                f" step operator flavour {AWS_BATCH_STEP_OPERATOR_FLAVOR}."
+            )
+        return self
 
 
 class AWSBatchStepOperatorFlavor(BaseStepOperatorFlavor):

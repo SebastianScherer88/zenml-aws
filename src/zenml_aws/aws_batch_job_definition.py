@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 from string import ascii_letters, digits
-from typing import Dict, List, Literal, cast
+from typing import Dict, List, Literal
 
 from pydantic import (
     BaseModel,
@@ -237,9 +237,7 @@ class AWSBatchJobDefinition(BaseModel):
         )
         command_and_arguments = command + arguments
 
-        orchestrator_config = cast(
-            AWSStepFunctionsOrchestratorConfig, orchestrator.config
-        )
+        orchestrator_config: AWSStepFunctionsOrchestratorConfig = orchestrator.config
 
         step: Step = placeholder_run.snapshot.step_configurations[step.config.name]
         orchestrator_step_settings: AWSStepFunctionsOrchestratorSettings = (
@@ -266,7 +264,7 @@ class AWSBatchJobDefinition(BaseModel):
                 "logDriver": "awslogs",
                 "options": {
                     "awslogs-group": orchestrator_config.batch_log_group,
-                    "awslogs-region": orchestrator_config.region,
+                    "awslogs-region": orchestrator_config.aws_region,
                     "awslogs-stream-prefix": f"orchestrator/{orchestrator_run_id}",
                 },
             }
@@ -281,9 +279,6 @@ class AWSBatchJobDefinition(BaseModel):
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
             )
-            container_kwargs["networkConfiguration"] = {
-                "assignPublicIp": orchestrator_step_settings.assign_public_ip
-            }
 
         return AWSBatchJobDefinitionClass(
             timeout={
@@ -292,8 +287,8 @@ class AWSBatchJobDefinition(BaseModel):
             type="container",
             tags=tags,
             containerProperties=AWSBatchContainerProperties(
-                executionRoleArn=orchestrator_config.batch_execution_role,
-                jobRoleArn=orchestrator_config.batch_job_role,
+                executionRoleArn=orchestrator_step_settings.batch_execution_role,
+                jobRoleArn=orchestrator_step_settings.batch_job_role,
                 image=orchestrator.get_image(
                     placeholder_run.snapshot, step.config.name
                 ),
@@ -338,7 +333,7 @@ class AWSBatchJobDefinition(BaseModel):
                 "logDriver": "awslogs",
                 "options": {
                     "awslogs-group": step_operator_config.log_group,
-                    "awslogs-region": step_operator_config.region,
+                    "awslogs-region": step_operator_config.aws_region,
                     "awslogs-stream-prefix": f"step-operator/{info.step_run_id}",
                 },
             }
@@ -353,17 +348,14 @@ class AWSBatchJobDefinition(BaseModel):
             AWSBatchContainerProperties = (
                 AWSBatchJobDefinitionFargateContainerProperties
             )
-            container_kwargs["networkConfiguration"] = {
-                "assignPublicIp": step_settings.assign_public_ip
-            }
 
         return AWSBatchJobDefinitionClass(
             timeout={"attemptDurationSeconds": step_settings.timeout_seconds},
             type="container",
             tags=tags,
             containerProperties=AWSBatchContainerProperties(
-                executionRoleArn=step_operator_config.execution_role,
-                jobRoleArn=step_operator_config.job_role,
+                executionRoleArn=step_settings.execution_role,
+                jobRoleArn=step_settings.job_role,
                 image=info.get_image(key=BATCH_DOCKER_IMAGE_KEY),
                 command=entrypoint_command,
                 environment=map_environment(environment),

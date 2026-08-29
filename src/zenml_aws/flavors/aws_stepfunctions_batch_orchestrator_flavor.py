@@ -2,7 +2,7 @@
 
 from typing import Literal, Optional, Type
 
-from pydantic import Field, PositiveInt
+from pydantic import Field, PositiveInt, model_validator
 from zenml.config.base_settings import BaseSettings
 from zenml.integrations.aws import (
     AWS_RESOURCE_TYPE,
@@ -10,7 +10,6 @@ from zenml.integrations.aws import (
 from zenml.models import ServiceConnectorRequirements
 from zenml.orchestrators import BaseOrchestratorConfig
 from zenml.orchestrators.base_orchestrator import BaseOrchestratorFlavor
-from zenml.utils.secret_utils import SecretField
 
 from zenml_aws.constants import (
     AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR,
@@ -21,28 +20,42 @@ from zenml_aws.constants import (
 class AWSStepFunctionsOrchestratorSettings(BaseSettings):
     """Settings for the AWS Step Functions Orchestrator."""
 
-    job_queue_name: str = Field(
-        default="",
-        description="The default AWS Batch job queue to submit each step's AWS"
-        " Batch job to. Can be overriden at the step level. Must be compatible"
-        " with `default_backend`.",
+    job_queue_name: str | None = Field(
+        default=None,
+        description="The AWS Batch job queue to submit each step's AWS"
+        " Batch job to. Can be overriden at the step level. If not provided, "
+        "falls back to the default job_queue_name specified at component "
+        "registration time.Must be compatible with `backend`.",
     )
-    backend: Literal["EC2", "FARGATE"] = Field(
-        default="FARGATE",
-        description="The default AWS Batch platform capability for each step's"
-        " AWS Batch job. Must be compatible with `job_queue_name`. Defaults to"
-        " 'FARGATE'.",
+    backend: Literal["EC2", "FARGATE"] | None = Field(
+        default=None,
+        description="The AWS Batch backend for each step's AWS Batch job. If "
+        "not provided, falls back to the backend specified at component "
+        "registration time. Must be compatible with `job_queue_name`",
+    )
+    stepfunctions_execution_role: str | None = Field(
+        default=None,
+        description="The IAM role arn of the Stepfunctions execution role. If "
+        "not provided, falls back to the stepfunctions_execution_role "
+        "specified at component registration time.",
+    )
+    batch_execution_role: str | None = Field(
+        default=None,
+        description="The IAM role arn of the AWS Batch's underlying ECS "
+        "execution role. If not provided, falls back to the "
+        "batch_execution_role specified at component registration time.",
+    )
+    batch_job_role: str | None = Field(
+        default=None,
+        description="The IAM role arn of the AWS Batch's underlying ECS task "
+        "role. If not provided, falls back to the batch_job_role specified at "
+        "component registration time.",
     )
     tags: dict[str, str] = Field(
         default=dict(),
         description="The tags for all steps' AWS BatchJobDefinition and"
         "Stepfunctions resources. For zenml meta tags added automatically, see"
         " the zenml.constants.AWSBatchTags class.",
-    )
-    assign_public_ip: Literal["ENABLED", "DISABLED"] = Field(
-        default="ENABLED",
-        description="Sets the network configuration's assignPublicIp field."
-        "Only relevant for FARGATE backend steps.",
     )
     timeout_seconds_step: PositiveInt = Field(
         default=900,
@@ -91,47 +104,18 @@ class AWSStepFunctionsOrchestratorConfig(
         name: Name of the orchestrator
     """
 
-    stepfunctions_execution_role: str = Field(
-        description="The IAM role arn of the Stepfunctions execution role."
-    )
     stepfunctions_log_group_arn: str = Field(
-        description="The ARN of the log "
-        "group for Stepfunctions executions. Must already exist.",
+        description="The ARN of the log group for Stepfunctions executions. "
+        "Must already exist.",
         default="/aws/zenml/stepfunctions",
     )
     batch_log_group: str = Field(
-        description="The log group for Batch jobs. Will", default="/aws/zenml/batch"
+        description="The log group for AWS Batch jobs", default="/aws/zenml/batch"
     )
-    batch_execution_role: str = Field(
-        description="The IAM role arn of the ECS execution role."
-    )
-    batch_job_role: str = Field(description="The IAM role arn of the ECS job role.")
-
-    aws_access_key_id: Optional[str] = SecretField(
-        default=None,
-        description="The AWS access key ID to use to authenticate to AWS. "
-        "If not provided, the value from the default AWS config will be used.",
-    )
-    aws_secret_access_key: Optional[str] = SecretField(
-        default=None,
-        description="The AWS secret access key to use to authenticate to AWS. "
-        "If not provided, the value from the default AWS config will be used.",
-    )
-    aws_profile: Optional[str] = Field(
-        None,
-        description="The AWS profile to use for authentication if not using "
-        "service connectors or explicit credentials. If not provided, the "
-        "default profile will be used.",
-    )
-    aws_auth_role_arn: Optional[str] = Field(
-        None,
-        description="The ARN of an intermediate IAM role to assume when "
-        "authenticating to AWS.",
-    )
-    region: Optional[str] = Field(
-        "eu-west-1",
-        description="The AWS region where the processing job will be run. "
-        "If not provided, the value from the default AWS config will be used.",
+    aws_region: str = Field(
+        description="The AWS region where the processing job will be run. If "
+        "not provided, the standard boto3 resolution chain will be used to "
+        "resolve this value."
     )
 
     @property
@@ -155,6 +139,28 @@ class AWSStepFunctionsOrchestratorConfig(
             Whether the orchestrator runs synchronous or not.
         """
         return self.synchronous
+
+    @model_validator(mode="after")
+    def require_aws_iam_fields(self):
+        required_fields = (
+            "job_queue_name",
+            "backend",
+            "stepfunctions_execution_role",
+            "batch_execution_role",
+            "batch_job_role",
+        )
+        missing_fields = [
+            required_field
+            for required_field in required_fields
+            if not getattr(self, required_field)
+        ]
+        if missing_fields:
+            raise ValueError(
+                f"Missing configuration values for fields {missing_fields} for"
+                "orchetrator flavour "
+                f"{AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR}."
+            )
+        return self
 
 
 class AWSStepFunctionsOrchestratorFlavor(BaseOrchestratorFlavor):

@@ -132,7 +132,7 @@ run:
 
 ```bash
 zenml step-operator flavor register zenml_aws.flavors.aws_batch_step_operator_flavor.AWSBatchStepOperatorFlavor
-zenml step-operator register aws-batch -f aws_batch --execution_role=${BATCH_EXECUTION_ROLE_ARN} --job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=${AWS_PROFILE} --delete_resources_on="[\"SUCCEEDED\"]" --log_group=${LOG_GROUP_NAME}
+zenml step-operator register aws-batch -f aws_batch --execution_role=${BATCH_EXECUTION_ROLE_ARN} --job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test\": \"step-operator\"}" --timeout_seconds=900 --delete_resources_on="[\"SUCCEEDED\"]" --log_group=${LOG_GROUP_NAME} --aws_region=${AWS_REGION}
 zenml stack register test-step-operator -o default -c aws-ecr -s aws-batch -a aws-s3
 zenml stack set test-step-operator
 ```
@@ -163,8 +163,8 @@ run:
 
 ```bash
 zenml orchestrator flavor register zenml_aws.flavors.aws_stepfunctions_batch_orchestrator_flavor.AWSStepFunctionsOrchestratorFlavor
-zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=${SFN_EXECUTION_ROLE_ARN} --batch_execution_role=${BATCH_EXECUTION_ROLE_ARN} --batch_job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test-2\": \"orchestrator\"}" --assign_public_ip=DISABLED --timeout_seconds=900 --aws_profile=${AWS_PROFILE} --delete_stepfunctions_resource_on="[]" --batch_log_group=${LOG_GROUP_NAME} --stepfunctions_log_group_arn=${LOG_GROUP_ARN}
-zenml stack register test-orchestrator -o aws-stepfunctions -c aws-ecr -a aws-s3 -s aws-batch
+zenml orchestrator register aws-stepfunctions -f aws_stepfunctions --stepfunctions_execution_role=${SFN_EXECUTION_ROLE_ARN} --batch_execution_role=${BATCH_EXECUTION_ROLE_ARN} --batch_job_role=${BATCH_JOB_ROLE_ARN} --job_queue_name=${BATCH_DEFAULT_JOB_QUEUE_NAME} --backend=FARGATE --tags="{\"test-2\": \"orchestrator\"}" --timeout_seconds=900 --delete_stepfunctions_resource_on="[]" --batch_log_group=${LOG_GROUP_NAME} --stepfunctions_log_group_arn=${LOG_GROUP_ARN} --aws_region=${AWS_REGION}
+zenml stack register test-orchestrator -o aws-stepfunctions -c aws-ecr -a aws-s3
 zenml stack set test-orchestrator
 ```
 
@@ -179,8 +179,6 @@ To remove this stack, remove the step operator and orchestrator components and
 ```bash
 zenml stack set default
 zenml stack delete test-orchestrator -y
-zenml step-operator delete aws-batch
-zenml step-operator flavor delete aws_batch
 zenml orchestrator delete aws-stepfunctions
 zenml orchestrator flavor delete aws_stepfunctions
 ```

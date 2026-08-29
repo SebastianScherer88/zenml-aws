@@ -42,6 +42,7 @@ from zenml_aws.aws_batch_job_definition import (
     sanitize_name,
 )
 from zenml_aws.constants import (
+    AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR,
     BATCH_JOB_TO_ZENML_EXECUTION_STATUS,
     ENV_ZENML_STEP_FUNCTIONS_JOB_ID,
     ENV_ZENML_STEP_FUNCTIONS_REGION,
@@ -96,17 +97,29 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
         def _validate_remote_components(
             stack: Stack,
         ) -> Tuple[bool, str]:
-            for component in stack.components.values():
-                if not component.config.is_local:
-                    continue
-
+            if stack.artifact_store.config.is_local:
                 return False, (
-                    f"The Stepfunctions orchestrator runs pipelines remotely, "
-                    f"but the '{component.name}' {component.type.value} is "
-                    "a local stack component and will not be available in "
-                    "the Stepfunctions step.\nPlease ensure that you always "
-                    "use non-local stack components with the Stepfunctions "
-                    "orchestrator."
+                    f"The {AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR} "
+                    "orchestrator flavour runs code remotely and needs to "
+                    "write files into the artifact store, but the artifact "
+                    f"store `{stack.artifact_store.name}` of the active stack "
+                    "is local. Please ensure that your stack contains a remote "
+                    "artifact store when using the "
+                    f"{AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR} orchestrator "
+                    "flavour."
+                )
+
+            assert stack.container_registry is not None
+            if stack.container_registry.config.is_local:
+                return False, (
+                    f"The {AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR} "
+                    "orchestrator flavour runs code remotely and needs to "
+                    "push/pull Docker images, but the container registry "
+                    f"`{stack.container_registry.name}` of the active stack is"
+                    "local. Please ensure that your stack contains a remote "
+                    "container registry when using the "
+                    f"{AWS_STEP_FUNCTIONS_ORCHESTRATOR_FLAVOR} orchestrator "
+                    "flavour."
                 )
 
             return True, ""
@@ -170,29 +183,9 @@ class AWSStepFunctionsOrchestrator(ContainerizedOrchestrator):
                     f"Expected to receive a `boto3.Session` object from the "
                     f"linked connector, but got type `{type(boto_session)}`."
                 )
-        # Option 2: Explicit configuration
-        # Args that are not provided will be taken from the default AWS config.
+        # Option 2: Boto3 cedential resolution chain
         else:
-            boto_session = Session(
-                aws_access_key_id=self.config.aws_access_key_id,
-                aws_secret_access_key=self.config.aws_secret_access_key,
-                region_name=self.config.region,
-                profile_name=self.config.aws_profile,
-            )
-            # If a role ARN is provided for authentication, assume the role
-            if self.config.aws_auth_role_arn:
-                sts = boto_session.client("sts")
-                response = sts.assume_role(
-                    RoleArn=self.config.aws_auth_role_arn,
-                    RoleSessionName="zenml-aws-batch-step-operator",
-                )
-                credentials = response["Credentials"]
-                boto_session = Session(
-                    aws_access_key_id=credentials["AccessKeyId"],
-                    aws_secret_access_key=credentials["SecretAccessKey"],
-                    aws_session_token=credentials["SessionToken"],
-                    region_name=self.config.region,
-                )
+            boto_session = Session()
         return boto_session
 
     def prepare_step_run(self, info: StepRunInfo):
